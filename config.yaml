@@ -1,0 +1,15 @@
+app:
+  name: Bundesliga App
+  environment: development
+
+mongodb:
+  uri: mongodb://localhost:27017
+  database: WhoScored
+
+collections:
+  available_teams: available_teams
+  schedule: game_schedule
+  team_stats: game_team_stats
+
+analytics:
+  default_season: latest

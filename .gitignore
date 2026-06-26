@@ -3,11 +3,14 @@ __pycache__/
 *.egg-info/
 
 .env
+.env.local
+.env*.local
 .venv/
 venv/
 
 node_modules/
 .next/
+*.tsbuildinfo
 dist/
 build/
 
