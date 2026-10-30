@@ -20,3 +20,17 @@ data/processed/
 *.parquet
 *.sqlite
 *.db
+
+.env.local
+.env.*.local
+*.tsbuildinfo
+next-env.d.ts
+
+playwright-report/
+test-results/
+
+# Generated/local assets and temporary files
+/public/team-logos/
+/public/stadium-icons/
+/tmp-crop.png
+/count_all_collection_seasons_tmp.py
