@@ -1,0 +1,690 @@
+"use client";
+
+import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Activity, ArrowRight, BarChart3, CalendarClock, CalendarDays, ListChecks,
+  ChevronDown, ChevronLeft, ChevronRight, Database, Goal, LayoutDashboard, Map as MapIcon,
+  LoaderCircle, MapPin, RefreshCw, Search, Shield, Trophy, UserRound, Users, X } from "lucide-react";
+import { useI18n, type Locale } from "@/lib/i18n";
+import SettingsMenu from "./settings-menu";
+import { completed, goalSummary, goalTrend, leagueTrend, standings } from "@/lib/analytics";
+import type { LeagueTrendMetric } from "@/lib/analytics";
+import { defaultMatchday, fixturesForMode, PERIODS, periodLabel as rawPeriodLabel, seasonPartLabel, venueLabel, seasonSubset, scoresForPeriod, statsForPeriod, teamVenueMatches } from "@/lib/filters";
+import type { FixtureMode } from "@/lib/filters";
+import type { Dashboard as Data, Match, MatchPeriod, SeasonPart, Team, TimelineEvent, VenueFilter } from "@/lib/types";
+import type { MatchPrediction } from "@/lib/predictions";
+import { aggregatePreviewStatistics, previewMetrics } from "@/lib/match-statistics";
+import { ComparisonBars } from "./comparison-bars";
+import MatchMomentum from "./match-momentum";
+import TeamAnalysis from "./team-analysis";
+import BundesligaHistory from "./bundesliga-history";
+
+type View = "overview" | "upcoming" | "results" | "standings" | "teams" | "teamAnalysis" | "players" | "predictions" | "goals" | "history";
+const allNavigation = [
+  {id:"overview" as View,label:"Overview",icon:LayoutDashboard},
+  {id:"upcoming" as View,label:"Upcoming",icon:CalendarClock},
+  {id:"results" as View,label:"Results",icon:ListChecks},
+  {id:"standings" as View,label:"Standings",icon:Trophy},
+  {id:"teams" as View,label:"Teams",icon:Shield},
+  {id:"players" as View,label:"Players",icon:UserRound}
+  ,{id:"history" as View,label:"History",icon:MapIcon}
+];
+const displaySeason = (s:string) => s.replace("-"," / ");
+const shortSeason = (s:string) => {const [start,end]=s.split("-");return end?`${start}/${end.slice(-2)}`:s;};
+const displayDate = (s:string,locale:Locale="en") => s ? new Intl.DateTimeFormat(({en:"en-GB",de:"de-DE",es:"es-ES",ro:"ro-RO"} as const)[locale],{day:"numeric",month:"short",year:"numeric",timeZone:"Europe/Berlin"}).format(new Date(s)) : "Date unavailable";
+const percent = (value:number) => Math.round(value)+"%";
+const abbreviate = (name:string) => name.replace("Borussia ","").replace("Eintracht ","").replace("Bayer 04 ","").replace("Bayer ","").replace("VfB ","").replace("FC ","");
+function OverviewScorers({goals,teamId}:{goals:Array<{teamId:number;playerName:string|null;minute:number|null;addedTime:number;subtype:string|null}>;teamId:number}) {
+  const scorers=goals.filter(goal=>goal.teamId===teamId).sort((a,b)=>(a.minute??999)-(b.minute??999));
+  const name=(value:string|null)=>{if(!value)return "Unknown scorer";const parts=value.trim().split(/\s+/);return parts.length>1?`${parts[0][0]}. ${parts.slice(1).join(" ")}`:value;};
+  const grouped=new Map<string,{name:string|null;minutes:string[];tags:Set<string>}>();
+  for(const goal of scorers){const key=goal.playerName??`unknown-${goal.minute}`;const entry=grouped.get(key)??{name:goal.playerName,minutes:[],tags:new Set<string>()};if(goal.minute!==null)entry.minutes.push(`${goal.minute}${goal.addedTime>0?`+${goal.addedTime}`:""}'`);if(goal.subtype==="penalty")entry.tags.add("(P)");if(goal.subtype==="own_goal")entry.tags.add("(OG)");grouped.set(key,entry);}
+  return <div className="overview-scorers">{Array.from(grouped.values()).map((goal,index)=><span key={`${goal.name}-${index}`}><span className="scorer-ball" aria-hidden="true">&#9917;&#65038;</span>{name(goal.name)}{goal.minutes.length?` ${goal.minutes.join(", ")}`:""}{goal.tags.size?` ${Array.from(goal.tags).join(" ")}`:""}</span>)}</div>;
+}
+function Badge({name,logos,large=false}:{name:string;logos:Record<string,string>;large?:boolean}) {
+  const [failed,setFailed] = useState(false);
+  const src=logos[name];
+  return <span className={"badge"+(large?" large":"")}>
+    {src && !failed ? <img src={src} alt="" onError={()=>setFailed(true)} /> :
+      <span>{name.split(" ").map(s=>s[0]).join("").slice(0,3).toUpperCase()}</span>}
+  </span>;
+}
+
+
+function StadiumIcon({team,stadiums}:{team:string;stadiums:Record<string,string>}) {
+  const [failed,setFailed]=useState(false);
+  const src=stadiums[team];
+  return <span className="stadium-icon" aria-hidden="true">
+    {src&&!failed?<img src={src} alt="" width={40} height={40} loading="lazy" onError={()=>setFailed(true)}/>:<MapPin size={21}/>}
+  </span>;
+}
+
+function Form({values}:{values:string[]}) {
+  const {t}=useI18n();
+  const title=(value:string)=>value==="W"?t("standings.win"):value==="D"?t("standings.draw"):t("standings.loss");
+  const short=(value:string)=>value==="W"?t("standings.winShort"):value==="D"?t("standings.drawShort"):t("standings.lossShort");
+  return <span className="form" aria-label={t("standings.form")}>{values.map((v,i)=><span key={i} className={v.toLowerCase()} title={title(v)}>{short(v)}</span>)}</span>;
+}
+
+function DevelopmentPage({title}:{title:string}) {
+  return <section className="panel development-page"><span className="eyebrow">IN DEVELOPMENT</span><h2>{title}</h2><p>This section is being developed.</p></section>;
+}
+
+function TrendChart({matches,venue="all"}:{matches:Match[];venue?:VenueFilter}) {
+  const {t}=useI18n();
+  const trend=goalTrend(matches,venue), max=Math.max(4,...trend.map(t=>t.average));
+  if (!trend.length) return <p className="empty">{t("dash.noCompletedMatches")}</p>;
+  const points=trend.map((t,i)=>`${32+i*596/Math.max(1,trend.length-1)},${175-t.average/max*140}`).join(" ");
+  return <div className="trend-chart">
+    <svg viewBox="0 0 660 214" role="img" aria-label={`${t("dash.metric.goals")} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
+      <defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="var(--accent)" stopOpacity=".22"/><stop offset="100%" stopColor="var(--accent)" stopOpacity="0"/></linearGradient></defs>
+      {[0,1,2,3,4].map(i=><g key={i}><line x1="32" x2="628" y1={175-i*35} y2={175-i*35} stroke="#465360" strokeDasharray="3 5"/><text x="8" y={179-i*35} fill="#a9b8c5" fontSize="10">{(i*max/4).toFixed(0)}</text></g>)}
+      {trend.length>1&&<polygon points={`32,175 ${points} 628,175`} fill="url(#chartFill)"/>}
+      <polyline points={points} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round"/>
+      {trend.map((point,i)=><g key={point.week}><circle cx={32+i*596/Math.max(1,trend.length-1)} cy={175-point.average/max*140} r="3" fill="#29323c" stroke="var(--accent)" strokeWidth="2"><title>{t("dash.matchdayLabel",{number:point.week})}: {point.average.toFixed(2)} · {t("dash.metric.goals")} · {point.played===1?t("dash.tooltipMatches.one",{count:point.played}):t("dash.tooltipMatches.other",{count:point.played})}</title></circle>{(i%Math.max(1,Math.ceil(trend.length/9))===0 || i===trend.length-1) && <text x={32+i*596/Math.max(1,trend.length-1)} y="201" textAnchor="middle" fill="#a9b8c5" fontSize="10">{point.week}</text>}</g>)}
+    </svg>
+    <div className="chart-caption"><span>{t("dash.metric.goals")}</span><span>{t("dash.matchday")}</span></div>
+  </div>;
+}
+
+function LeagueTrendChart({points,label,percentValue}:{points:{week:number;played:number;scheduled:number;value:number|null}[];label:string;percentValue?:boolean}) {
+  const {t}=useI18n();
+  const values=points.map(point=>point.value).filter((value):value is number=>value!==null);
+  if (!values.length) return <p className="empty">{t("dash.noCompletedMatches")}</p>;
+  const observedMin=Math.min(...values), observedMax=Math.max(...values);
+  const observedRange=Math.max(.01,observedMax-observedMin);
+  const padding=Math.max(observedRange*.15,percentValue?1:.15);
+  const min=Math.max(0,observedMin-padding);
+  const max=percentValue?Math.min(100,observedMax+padding):observedMax+padding;
+  const range=Math.max(.01,max-min);
+  const pointsString=points.map((point,index)=>`${32+index*596/Math.max(1,points.length-1)},${175-((point.value??min)-min)/range*140}`).join(" ");
+  const tooltipCount=(count:number)=>count===1?t("dash.tooltipMatches.one",{count}):t("dash.tooltipMatches.other",{count});
+  return <div className="trend-chart"><svg viewBox="0 0 660 214" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
+    {[0,1,2,3,4].map(index=><g key={index}><line x1="32" x2="628" y1={175-index*35} y2={175-index*35} stroke="#465360" strokeDasharray="3 5"/><text x="8" y={179-index*35} fill="#a9b8c5" fontSize="10">{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
+    <polyline points={pointsString} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round"/>
+    {points.map((point,index)=><g key={point.week}><circle cx={32+index*596/Math.max(1,points.length-1)} cy={175-((point.value??min)-min)/range*140} r="3" fill="#29323c" stroke="var(--accent)" strokeWidth="2"><title>{t("dash.matchdayLabel",{number:point.week})}: {point.value===null?t("dash.tooltipUnavailable"):point.value.toFixed(percentValue?1:2)+(percentValue?"%":"")} · {label} · {tooltipCount(point.played)}{point.scheduled?` · ${t("dash.tooltipStillToPlay",{count:point.scheduled})}`:""}</title></circle>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text x={32+index*596/Math.max(1,points.length-1)} y="201" textAnchor="middle" fill="#a9b8c5" fontSize="10">{point.week}</text>}</g>)}
+  </svg><div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
+}
+
+
+function matchdayDates(matches:Match[],locale:Locale="en") {
+  const dates=matches.map(m=>m.date).filter(Boolean).sort();
+  if (!dates.length) return "Dates unavailable";
+  const first=displayDate(dates[0],locale),last=displayDate(dates[dates.length-1],locale);
+  return first===last?first:first+" "+String.fromCharCode(0x2013)+" "+last;
+}
+
+function berlinDateKey(value:string) {
+  const parts=new Intl.DateTimeFormat("en-CA",{year:"numeric",month:"2-digit",day:"2-digit",timeZone:"Europe/Berlin"}).formatToParts(new Date(value));
+  const get=(type:string)=>parts.find(part=>part.type===type)?.value??"";
+  return [get("year"),get("month"),get("day")].join("-");
+}
+
+function fixtureDateHeading(value:string,locale:Locale="en") {
+  return new Intl.DateTimeFormat(({en:"en-GB",de:"de-DE",es:"es-ES",ro:"ro-RO"} as const)[locale],{weekday:"long",day:"numeric",month:"long",year:"numeric",timeZone:"Europe/Berlin"}).format(new Date(value)).toUpperCase();
+}
+
+const kickoffTime = (date:string) => date ? new Intl.DateTimeFormat("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Europe/Berlin"}).format(new Date(date))+" CET" : "Kick-off TBC";
+const ordinal = (value:number) => value%100>=11&&value%100<=13?value+"th":value+(value%10===1?"st":value%10===2?"nd":value%10===3?"rd":"th");
+const fixtureLabel = (match:Match) => match.status==="live"?"Live":match.status==="postponed"?"Postponed":match.status==="cancelled"?"Cancelled":match.status==="finished"?"Full time":"Scheduled";
+
+function recentMatches(matches:Match[], teamId:number, before:string) {
+  return matches.filter(m=>m.finished&&m.homeGoals!==null&&m.awayGoals!==null&&(m.homeId===teamId||m.awayId===teamId)&&m.date<before)
+    .sort((a,b)=>b.date.localeCompare(a.date)).slice(0,5);
+}
+
+function PreviewResults({matches,teamId}:{matches:Match[];teamId:number}) {
+  const {t}=useI18n();
+  if(!matches.length)return <p className="preview-empty">No prior results in the imported archive.</p>;
+  return <div className="preview-results">{matches.map(m=>{
+    const home=m.homeId===teamId, goalsFor=home?m.homeGoals!:m.awayGoals!, goalsAgainst=home?m.awayGoals!:m.homeGoals!;
+    const result=goalsFor>goalsAgainst?"W":goalsFor===goalsAgainst?"D":"L";
+    const resultLabel=result==="W"?t("standings.winShort"):result==="D"?t("standings.drawShort"):t("standings.lossShort");
+    return <div className="preview-result" key={m.id}><span className={"result-dot "+result.toLowerCase()}>{resultLabel}</span><span>{displayDate(m.date)}</span><strong>{home?m.away:m.home}</strong><b>{goalsFor} &ndash; {goalsAgainst}</b></div>;
+  })}</div>;
+}
+
+function PredictionPanel({prediction}:{prediction:MatchPrediction|null}) {
+  const {t}=useI18n();
+  if(!prediction || prediction.status!=="available") return <section className="prediction-empty" aria-label="Predictions">
+    <span className="eyebrow">{t("ui.predictions").toUpperCase()}</span><h3>{t("ui.predictionsComingSoon")}</h3><p>{t("ui.predictionsDescription")}</p>
+    <div className="prediction-ready"><section><h4>{t("ui.matchResult")}</h4><span>{t("ui.homeWin")} · {t("ui.draw")} · {t("ui.awayWin")}</span><i/></section><section><h4>{t("ui.goals")}</h4><span>{t("ui.xgTotalsBtts")}</span><i/></section><section><h4>{t("ui.corners")}</h4><span>{t("ui.expectedTotalOver")}</span><i/></section><section><h4>{t("ui.shots")}</h4><span>{t("ui.shotsOnTarget")}</span><i/></section></div>
+  </section>;
+  return null;
+}
+
+function CompletedMatchDetails({match,home,away,onAnalysis}:{match:Match;home:ReturnType<typeof statsForPeriod>;away:ReturnType<typeof statsForPeriod>;onAnalysis:()=>void}) {
+  const {t}=useI18n();
+  const rows=[
+    {label:t("report.possession"),home:home?.possession,away:away?.possession,percent:true},
+    {label:t("stats.metric.shots"),home:home?.shots,away:away?.shots},
+    {label:t("stats.metric.shot_on_target"),home:home?.onTarget,away:away?.onTarget},
+    {label:t("stats.metric.corners"),home:home?.corners,away:away?.corners},
+    {label:t("stats.metric.yellow_card"),home:home?.yellowCards,away:away?.yellowCards},
+    {label:t("stats.metric.red_card"),home:home?.redCards,away:away?.redCards}
+  ];
+  return <div className="completed-details"><MatchMomentum homeName={match.home} awayName={match.away}/><section className="main-match-stats">{rows.map(row=>{const available=row.home!==null&&row.home!==undefined&&row.away!==null&&row.away!==undefined;const total=(row.home??0)+(row.away??0);const value=(amount:number|null|undefined)=>amount===null||amount===undefined?"?":row.percent?percent(amount*100):amount.toFixed(0);return <div className="comparison" key={row.label}><div><strong>{value(row.home)}</strong><span>{row.label}</span><strong>{value(row.away)}</strong></div><div className="compare-track"><span style={{width:available&&total?`${(row.home??0)/total*100}%`:"50%",opacity:available?1:.15}}/><span style={{flex:1,opacity:available?1:.15}}/></div></div>})}</section><button className="full-analysis-link" onClick={onAnalysis}>{t("ui.viewFullAnalysis")} <ArrowRight size={15}/></button></div>;
+}
+function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:MatchPeriod;onClose:()=>void}) {
+  const {locale,t}=useI18n();
+  const dialog=useRef<HTMLDialogElement>(null);
+  const [panel,setPanel]=useState<"overview"|"predictions"|"statistics">("overview");
+  const [h2hScope,setH2hScope]=useState<"all"|"venue">("all");
+  const [averageScope,setAverageScope]=useState<"all"|"venue">("all");
+  const [statsCategory,setStatsCategory]=useState<"attack"|"defense"|"passing">("attack");
+  const [statsLens,setStatsLens]=useState<"for"|"against"|"team"|"opponent">("team");
+  useEffect(()=>{
+    const d=dialog.current; d?.showModal();
+    const prev=document.body.style.overflow; document.body.style.overflow="hidden";
+    return ()=>{document.body.style.overflow=prev;};
+  },[]);
+  const home=statsForPeriod(data.stats.find(s=>s.gameId===match.id && s.teamId===match.homeId),period);
+  const away=statsForPeriod(data.stats.find(s=>s.gameId===match.id && s.teamId===match.awayId),period);
+  const rows=[
+    {label:"Shots",h:home?.shots,a:away?.shots,pct:false},
+    {label:"On target",h:home?.onTarget,a:away?.onTarget,pct:false},
+    {label:"Possession",h:home?.possession,a:away?.possession,pct:true},
+    {label:"Pass attempts",h:home?.passes,a:away?.passes,pct:false},
+    {label:"Pass completion",h:home?.passCompletion,a:away?.passCompletion,pct:true}
+  ];
+  const isFixture=!match.finished;
+  const archive=data.historicalMatches;
+  const homeRecent=isFixture?recentMatches(archive,match.homeId,match.date):[];
+  const awayRecent=isFixture?recentMatches(archive,match.awayId,match.date):[];
+  const allH2h=isFixture?archive.filter(m=>m.date<match.date&&((m.homeId===match.homeId&&m.awayId===match.awayId)||(m.homeId===match.awayId&&m.awayId===match.homeId))):[];
+  const h2h=(h2hScope==="venue"?allH2h.filter(m=>m.homeId===match.homeId):allH2h).slice(0,5);
+  const statisticsOptions={lens:(statsLens==="team"?"for":statsLens==="opponent"?"against":statsLens),venue:(averageScope==="venue"?"home":"all") as VenueFilter,period,before:match.date};
+  const homeAverage=aggregatePreviewStatistics(data.matches,data.stats,match.homeId,statisticsOptions);
+  const awayAverage=aggregatePreviewStatistics(data.matches,data.stats,match.awayId,{...statisticsOptions,venue:averageScope==="venue"?"away":"all"});
+  const statisticsRows=previewMetrics(homeAverage,awayAverage,statsCategory);
+  const homeDisplayName=data.fullTeamNames?.[match.home] ?? match.home;
+  const awayDisplayName=data.fullTeamNames?.[match.away] ?? match.away;
+  return <dialog ref={dialog} className="match-dialog" onCancel={onClose}
+    onClick={e=>{if(e.target===e.currentTarget)onClose();}} aria-labelledby="match-title">
+    <div className="dialog-top"><span className="eyebrow">{isFixture?t("ui.matchPreview"):t("ui.matchReport")}   ·   {t("ui.matchday")} {match.week}{data.season?` - ${t("ui.season")} ${displaySeason(data.season)}`:""}</span><button className="icon-button" onClick={onClose} aria-label={t("ui.close")}><X size={20}/></button></div>
+    <h2 id="match-title" className="sr-only">{match.home} versus {match.away}</h2>
+    {match.finished&&<p className="match-date">{displayDate(match.date,locale)}</p>}
+    {match.finished&&<p className="match-kickoff">{t("ui.kickoff")} {kickoffTime(match.date)}</p>}
+    <div className="scoreboard">
+      <div><Badge name={match.home} logos={data.logos} large/><h3>{homeDisplayName}</h3><OverviewScorers goals={data.goalscorers[String(match.id)]??[]} teamId={match.homeId}/></div>
+      <div className="score"><strong>{match.finished?<>{match.homeGoals ?? "?"} <span>:</span> {match.awayGoals ?? "?"}</>:"vs"}</strong>{match.finished&&<small className="modal-xg">xG&nbsp; &mdash; : &mdash;</small>}{match.finished?<span className="pill">{period==="ft"?t("ui.fullTime").toUpperCase():rawPeriodLabel(period).toUpperCase()}</span>:<span className="fixture-kickoff">{displayDate(match.date,locale)}<b>{kickoffTime(match.date)}</b></span>}</div>
+      <div><Badge name={match.away} logos={data.logos} large/><h3>{awayDisplayName}</h3><OverviewScorers goals={data.goalscorers[String(match.id)]??[]} teamId={match.awayId}/></div>
+    </div>
+
+    <div className="venue-inline" aria-label={t("ui.stadium")}>
+      <StadiumIcon team={match.home} stadiums={data.stadiums}/>
+      <strong>{match.venue||t("report.venueUnavailable")}</strong>
+      {match.attendance!==null&&<span className="venue-attendance"><Users size={13}/>{match.attendance.toLocaleString("en-GB")}</span>}
+    </div>
+    {match.finished?<CompletedMatchDetails match={match} home={home} away={away} onAnalysis={()=>window.location.assign(`/results/${match.id}`)}/>:<>
+    <nav className="dialog-tabs" aria-label={t("ui.fixturePreviewSections")}><button className={panel==="overview"?"active":""} onClick={()=>setPanel("overview")}>{t("nav.overview")}</button><button className={panel==="predictions"?"active":""} onClick={()=>setPanel("predictions")}>{t("ui.predictions")}</button><button className={panel==="statistics"?"active":""} onClick={()=>setPanel("statistics")}>{t("ui.statistics")}</button></nav>
+    {panel==="statistics"&&match.finished&&<><h3 className="section-subtitle">{period==="ft"?t("ui.fullTimeComparison"):rawPeriodLabel(period)+" · "+t("ui.comparison")}</h3>
+    {rows.map(row=>{
+      const available=row.h!=null && row.a!=null;
+      const format=(v:number|null|undefined)=>v==null?"?":row.pct?percent(v*100):v.toLocaleString();
+      const sum=(row.h??0)+(row.a??0);
+      return <div className="comparison" key={row.label}>
+        <div><strong>{format(row.h)}</strong><span>{row.label}</span><strong>{format(row.a)}</strong></div>
+        <div className="compare-track"><span style={{width:(available && sum?row.h!/sum*100:50)+"%",opacity:available?1:.15}}/><span style={{flex:1,opacity:available?1:.15}}/></div>
+      </div>;
+    })}
+    {(!home || !away) && <p className="data-note">Some team statistics have not been imported for this match.</p>}</>}
+    {panel==="overview"&&isFixture&&<section className="fixture-preview" aria-label="Fixture preview">
+      <div className="preview-heading"><span className="eyebrow">{t("ui.fixturePreview").toUpperCase()}</span><h3>{t("ui.recentFormContext")}</h3></div>
+      <div className="form-preview-grid"><div><h4>{match.home}   ·   last 5</h4><PreviewResults matches={homeRecent} teamId={match.homeId}/></div><div><h4>{match.away}   ·   last 5</h4><PreviewResults matches={awayRecent} teamId={match.awayId}/></div></div>
+      <div className="h2h-preview"><div className="preview-title-row"><h4>{t("ui.headToHead")}   ·   {t("ui.lastFive")}</h4><div className="preview-tabs"><button className={h2hScope==="all"?"active":""} onClick={()=>setH2hScope("all")}>{t("ui.all")}</button><button className={h2hScope==="venue"?"active":""} onClick={()=>setH2hScope("venue")}>{t("ui.at")} {abbreviate(match.home)}</button></div></div>{h2h.length?<div className="preview-results">{h2h.map(m=><div className="preview-result h2h-row" key={m.id}><span>{displayDate(m.date)}</span><strong>{m.home}</strong><b>{m.homeGoals!==null&&m.awayGoals!==null?`${m.homeGoals} ${String.fromCharCode(8211)} ${m.awayGoals}`:`${String.fromCharCode(8212)}`}</b><strong>{m.away}</strong></div>)}</div>:<p className="preview-empty">{t("ui.noPriorMeeting")}</p>}</div>
+    </section>}
+    {panel==="statistics"&&<section className="fixture-preview statistics-preview" aria-label={t("ui.seasonStatistics")}><div className="preview-title-row"><h3>{statsLens==="team"?t("ui.teamAverages"):t("ui.opponentAverages")}</h3><div className="preview-tabs"><button className={averageScope==="all"?"active":""} onClick={()=>setAverageScope("all")}>{t("ui.season")}</button><button className={averageScope==="venue"?"active":""} onClick={()=>setAverageScope("venue")}>{t("ui.venue")}</button></div></div><div className="stats-lens-row"><div className="stats-lens"><button className={statsLens==="team"?"active":""} onClick={()=>setStatsLens("team")}>{t("ui.team")}</button><button className={statsLens==="opponent"?"active":""} onClick={()=>setStatsLens("opponent")}>{t("ui.opponent")}</button></div><span className="stats-lens-note">{t("ui.forOutput")} · {t("ui.againstOutput")}</span></div><div className="stat-category-tabs"><button className={statsCategory==="attack"?"active":""} onClick={()=>setStatsCategory("attack")}>{t("ui.attackCategory")}</button><button className={statsCategory==="defense"?"active":""} onClick={()=>setStatsCategory("defense")}>{t("ui.defenseCategory")}</button><button className={statsCategory==="passing"?"active":""} onClick={()=>setStatsCategory("passing")}>{t("ui.passingCategory")}</button></div><div className="average-grid"><strong>{match.home}</strong><span>{t("ui.metric")}</span><strong>{match.away}</strong>{statisticsRows.map(row=><><b key={row.label+"-h"}>{typeof row.home==="number"?(row.label==="Matches played"?String(row.home):row.percent?percent(row.home*100):row.home.toFixed(1)):"?"}</b><span key={row.label}>{row.label}</span><b key={row.label+"-a"}>{typeof row.away==="number"?(row.label==="Matches played"?String(row.away):row.percent?percent(row.away*100):row.away.toFixed(1)):"?"}</b></>)}</div></section>}
+    {panel==="predictions"&&<PredictionPanel prediction={null}/>} </>}
+  </dialog>;
+}
+
+export default function Dashboard() {
+  const {t,locale}=useI18n();
+  const matchdayText=(number:number)=>t("dash.matchdayLabel",{number});
+  const matchdayRangeText=(from:number,to:number)=>t("dash.matchdayRange",{from,to});
+  const periodText=(value:MatchPeriod)=>t(`period.${value}`);
+  const seasonPartText=(value:SeasonPart)=>value==="first"?t("dash.firstHalf"):value==="second"?t("dash.secondHalf"):t("dash.fullSeason");
+  const venueText=(value:VenueFilter)=>value==="home"?t("dash.home"):value==="away"?t("dash.away"):t("dash.allVenues");
+  const [data,setData]=useState<Data|null>(null);
+  const [season,setSeason]=useState("");
+  const [loading,setLoading]=useState(true);
+  const [error,setError]=useState("");
+  const router=useRouter();
+  const pathname=usePathname();
+  const isMatchReport=/^\/(results|matches)\/\d+$/.test(pathname);
+  const teamAnalysisMatch = pathname.match(/^\/teams\/(\d+)$/);
+  const teamAnalysisId = teamAnalysisMatch ? Number(teamAnalysisMatch[1]) : null;
+  const view:View=pathname==="/goals" ? "goals" : pathname==="/matches" ? "results" : teamAnalysisId !== null ? "teamAnalysis" : allNavigation.find(item=>"/"+item.id===pathname)?.id??(isMatchReport?"results":"overview");
+  // Only Results and Standings browse historical seasons. All other dashboard
+  // views are always backed by the newest imported Bundesliga season.
+  const seasonSelectable = view === "results" || view === "standings" || view === "teamAnalysis";
+  const setView=(next:View)=>router.push("/"+next);
+  const navigation=allNavigation;
+  const [standingsFrom,setStandingsFrom]=useState(1);
+  const [standingsTo,setStandingsTo]=useState(34);
+  const [standingsFiltersOpen,setStandingsFiltersOpen]=useState(false);
+  const previousView=useRef<View>(view);
+  const [query,setQuery]=useState("");
+  const [week,setWeek]=useState("");
+  const loadedSeason=useRef("");
+  const [selected,setSelected]=useState<Match|null>(null);
+  const [revision,setRevision]=useState(0);
+  const [teamId,setTeamId]=useState<number|null>(null);
+  const [period,setPeriod]=useState<MatchPeriod>("ft");
+  const [overviewMetric,setOverviewMetric]=useState<LeagueTrendMetric>("goals");
+  const [seasonPart,setSeasonPart]=useState<SeasonPart>("all");
+  const [venue,setVenue]=useState<VenueFilter>("all");
+  useEffect(()=>{
+    const controller=new AbortController();
+    setLoading(true);setError("");setSelected(null);setData(null);
+    const requestedSeason = seasonSelectable ? season : "";
+    fetch("/api/dashboard"+(requestedSeason?"?season="+encodeURIComponent(requestedSeason):""),{signal:controller.signal,cache:"no-store"})
+      .then(async response=>{
+        const body=await response.json();
+        if(!response.ok)throw new Error(body.error??"Unable to load the dashboard.");
+        return body as Data;
+      }).then(body=>{
+        const changed=loadedSeason.current!==body.season;
+        loadedSeason.current=body.season;
+        setData(body);
+        if(changed){
+          const mode:FixtureMode=view==="upcoming"?"upcoming":"results";
+          setWeek(String(defaultMatchday(body.matches,mode)??""));setTeamId(null);
+        }else setTeamId(previous=>body.teams.some(t=>t.id===previous)?previous:null);
+      })
+      .catch(err=>{if(err.name!=="AbortError")setError(err.message);})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+    return ()=>controller.abort();
+  },[season,seasonSelectable,revision,view]);
+
+
+  const effectiveMode:FixtureMode=view==="upcoming"?"upcoming":"results";
+  // Demo mode: keep the final matchday of the current-season Upcoming view scheduled
+  // so the page can be previewed without changing MongoDB or historical results.
+  const demoUpcomingMatches=useMemo(()=>{
+    const matches=data?.matches??[];
+    if(view!=="upcoming"||!matches.length)return matches;
+    const finalWeek=Math.max(...matches.map(match=>match.week));
+    return matches.map(match=>match.week===finalWeek?{...match,finished:false,status:"scheduled" as const,homeGoals:null,awayGoals:null,attendance:null}:match);
+  },[data,view]);
+  const seasonMatchdayCount=useMemo(()=>Math.max(1,...(data?.matches??[]).map(match=>match.week).filter(week=>week>0)),[data]);
+  const historicalSeason=Boolean(data?.matches.some(match=>match.historical));
+  useEffect(()=>{
+    setStandingsFrom(1);
+    setStandingsTo(seasonMatchdayCount);
+  },[data?.season,seasonMatchdayCount]);
+  useEffect(()=>{ if (historicalSeason) setPeriod("ft"); },[historicalSeason]);
+  const activePeriod: MatchPeriod = historicalSeason ? "ft" : period;
+  // Upcoming is deliberately fixture-only: it must not inherit result filters.
+  const phaseMatches=useMemo(()=>view==="upcoming"?demoUpcomingMatches:seasonSubset(data?.matches??[],seasonPart,seasonMatchdayCount),[data,seasonPart,view,demoUpcomingMatches,seasonMatchdayCount]);
+  const scoredMatches=useMemo(()=>view==="upcoming"?phaseMatches:scoresForPeriod(phaseMatches,data?.stats??[],activePeriod),[phaseMatches,data,activePeriod,view]);
+  const fixtureMatches=useMemo(()=>fixturesForMode(scoredMatches,effectiveMode),[scoredMatches,effectiveMode]);
+  const roundMatches=useMemo(()=>week==="all"?fixtureMatches:fixtureMatches.filter(m=>m.week===Number(week)),[fixtureMatches,week]);
+  const isTeamHistory=view==="results" && teamId!==null;
+  const teamMatches=useMemo(()=>teamVenueMatches(roundMatches,teamId??-1,venue),[roundMatches,teamId,venue]);
+  const tableMatches=useMemo(()=>view==="standings"?scoredMatches.filter(m=>m.week>=standingsFrom&&m.week<=standingsTo):scoredMatches,[view,scoredMatches,standingsFrom,standingsTo]);
+  const scopeMatches=view==="standings"?tableMatches:isTeamHistory?teamMatches:roundMatches;
+  const historyMatches=scoredMatches;
+    const selectedSeasonConfig = data?.seasonConfigs?.find(config=>config.season===data.season);
+    const pointsForWin= selectedSeasonConfig?.rules?.pointsForWin ?? 3;
+    const pointsForDraw= selectedSeasonConfig?.rules?.pointsForDraw ?? 1;
+    const standingsTiebreakers = selectedSeasonConfig?.standingsTiebreakers;
+    const tableTeams=useMemo(()=>standings(tableMatches,venue,data?.matches??[],pointsForWin,standingsTiebreakers,pointsForDraw,selectedSeasonConfig),[tableMatches,venue,data,pointsForWin,pointsForDraw,standingsTiebreakers,selectedSeasonConfig]);
+  const metricVenue=isTeamHistory?"all":venue;
+  const summary=useMemo(()=>goalSummary(scopeMatches,metricVenue),[scopeMatches,metricVenue]);
+  const finishedMatches=useMemo(()=>completed(scopeMatches),[scopeMatches]);
+  const missingPeriod=scopeMatches.filter(m=>m.finished).length-finishedMatches.length;
+  const homeRecord=useMemo(()=>finishedMatches.reduce((record,m)=>{
+    const away=isTeamHistory?m.awayId===teamId:venue==="away";
+    const goalsFor=away?m.awayGoals!:m.homeGoals!;
+    const goalsAgainst=away?m.homeGoals!:m.awayGoals!;
+    if(goalsFor>goalsAgainst)record.wins++;
+    else if(goalsFor===goalsAgainst)record.draws++;
+    else record.losses++;
+    return record;
+  },{wins:0,draws:0,losses:0}),[finishedMatches,isTeamHistory,teamId,venue]);
+  const attendance=useMemo(()=>{
+    const physical=scopeMatches.filter(m=>m.finished),reported=physical.filter(m=>m.attendance!==null);
+    return {count:reported.length,matches:physical.length,average:reported.length?reported.reduce((sum,m)=>sum+m.attendance!,0)/reported.length:null};
+  },[scopeMatches]);
+  const distribution=useMemo(()=>[0,1,2,3,4,5].map(goals=>({
+    label:goals===5?"5+":String(goals),
+    count:finishedMatches.filter(m=>{
+      const total=metricVenue==="home"?m.homeGoals!:metricVenue==="away"?m.awayGoals!:m.homeGoals!+m.awayGoals!;
+      return goals===5?total>=5:total===goals;
+    }).length
+  })),[finishedMatches,metricVenue]);
+  const weeks=useMemo(()=>[...new Set(fixtureMatches.map(m=>m.week).filter(w=>w>0))].sort((a,b)=>a-b),[fixtureMatches]);
+  const preferredWeek=defaultMatchday(phaseMatches,effectiveMode);
+  useEffect(()=>{
+    const changed=previousView.current!==view;
+    previousView.current=view;
+    setSelected(null);
+    const reset=changed&&(view==="upcoming"||(view==="results"&&teamId===null));
+    setWeek(previous=>!reset&&(previous==="all"||weeks.includes(Number(previous)))?previous:String(preferredWeek??""));
+  },[weeks,preferredWeek,view]);
+  useEffect(()=>{
+    if(data&&!loading&&view==="upcoming"&&!phaseMatches.some(m=>!m.finished))router.replace("/results");
+  },[data,loading,view,router,phaseMatches]);
+  const weekIndex=weeks.indexOf(Number(week));
+  const filtered=useMemo(()=>scopeMatches.filter(m=>(m.home+" "+m.away).toLowerCase().includes(query.toLowerCase())),[scopeMatches,query]);
+  const visible=filtered;
+  const teams=tableTeams.filter(t=>t.name.toLowerCase().includes(query.toLowerCase()));
+  const selectView=(next:View)=>{
+    setQuery("");setTeamId(null);
+    if(next==="results"||next==="upcoming")setWeek(String(defaultMatchday(phaseMatches,next==="upcoming"?"upcoming":"results")??""));
+    setView(next);
+  };
+  const selectedTeam=tableTeams.find(t=>t.id===teamId);
+  const ranked=[...tableTeams].filter(t=>t.played>0).sort((a,b)=>b.gf/b.played-a.gf/a.played).slice(0,5);
+  const overviewCompleted=useMemo(()=>completed(data?.matches??[]),[data]);
+  const latestCompletedWeek=useMemo(()=>Math.max(0,...overviewCompleted.map(match=>match.week)),[overviewCompleted]);
+  const overviewResults=useMemo(()=>overviewCompleted.filter(match=>match.week===latestCompletedWeek).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id),[overviewCompleted,latestCompletedWeek]);
+  const overviewScheduled=useMemo(()=>(data?.matches??[]).filter(match=>match.week===latestCompletedWeek).length-overviewResults.length,[data,latestCompletedWeek,overviewResults]);
+  const overviewSummary=useMemo(()=>{
+    const goals=overviewResults.reduce((sum,match)=>sum+(match.homeGoals??0)+(match.awayGoals??0),0);
+    const attendance=overviewResults.filter(match=>typeof match.attendance==="number");
+    const homeResults=overviewResults.reduce((result,match)=>{
+      if((match.homeGoals??0)>(match.awayGoals??0))result.won++;
+      else if((match.homeGoals??0)===(match.awayGoals??0))result.drawn++;
+      else result.lost++;
+      return result;
+    },{won:0,drawn:0,lost:0});
+    const attendanceTotal=attendance.reduce((sum,match)=>sum+(match.attendance??0),0);
+    return {goals,attendanceAverage:attendance.length?attendanceTotal/attendance.length:null,attendanceReported:attendance.length,homeResults};
+  },[overviewResults]);
+    const overviewTable=useMemo(()=>standings(overviewCompleted,"all",data?.matches??[],pointsForWin,standingsTiebreakers,pointsForDraw,selectedSeasonConfig),[overviewCompleted,data,pointsForWin,pointsForDraw,standingsTiebreakers,selectedSeasonConfig]);
+  const overviewTrend=useMemo(()=>leagueTrend(data?.matches??[],data?.stats??[],overviewMetric),[data,overviewMetric]);
+  const overviewTrendSummary=useMemo(()=>{
+    const rows=new Map((data?.stats??[]).map(row=>[`${row.gameId}:${row.teamId}`,row]));
+    let numerator=0,denominator=0,eligible=0;
+    for(const fixture of overviewCompleted){
+      if(overviewMetric==="goals"){
+        numerator+=fixture.homeGoals!+fixture.awayGoals!; eligible++;
+        continue;
+      }
+      const home=rows.get(`${fixture.id}:${fixture.homeId}`)?.periods?.ft;
+      const away=rows.get(`${fixture.id}:${fixture.awayId}`)?.periods?.ft;
+      const values=overviewMetric==="shots"?[home?.shots,away?.shots]:overviewMetric==="shotsOnTarget"?[home?.onTarget,away?.onTarget]:overviewMetric==="corners"?[home?.corners,away?.corners]:overviewMetric==="yellowCards"?[home?.yellowCards,away?.yellowCards]:overviewMetric==="fouls"?[home?.foulsCommitted,away?.foulsCommitted]:[home?.completedPasses,away?.completedPasses];
+      if(values.some(value=>typeof value!=="number"))continue;
+      const numericValues=values as number[];
+      if(overviewMetric==="passCompletion"){
+        const attempts=[home?.passes,away?.passes];
+        if(attempts.some(value=>typeof value!=="number"))continue;
+        numerator+=numericValues.reduce((sum,value)=>sum+value,0);
+        denominator+=(attempts as number[]).reduce((sum,value)=>sum+value,0);
+      }else numerator+=numericValues.reduce((sum,value)=>sum+value,0);
+      eligible++;
+    }
+    return {average:overviewMetric==="passCompletion"?(denominator>0?numerator/denominator*100:null):(eligible>0?numerator/eligible:null),latest:overviewTrend.at(-1)?.value??null};
+  },[data,overviewCompleted,overviewMetric,overviewTrend]);
+
+
+  function renderResults() {
+    const showMatchdayHeaders=view==="results" && week==="all" && !isTeamHistory;
+    const dateGroups = view==="results" ? Array.from(visible.reduce((groups,match)=>{
+      const key=berlinDateKey(match.date);
+      const group=groups.get(key)??[];
+      group.push(match); groups.set(key,group); return groups;
+    },new Map<string,Match[]>()).entries()).sort(([a],[b])=>a.localeCompare(b)).map(([key,matches])=>({key,matches:matches.sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime())})) : [{key:"",matches:visible}];
+    const renderFixture=(m:Match,showRowMatchday=false)=>{const shortHome=data!.shortTeamNames?.[String(m.homeId)] ?? abbreviate(m.home); const shortAway=data!.shortTeamNames?.[String(m.awayId)] ?? abbreviate(m.away); const canPreview=!m.historical&&(m.finished||effectiveMode==="upcoming"); return <button key={m.id} disabled={!canPreview} className={"match-row grouped"+(isTeamHistory||!m.finished?" history-row":"")+(canPreview?"":" calendar-only")} onClick={canPreview?()=>m.finished?router.push(`/results/${m.id}`):setSelected(m):undefined}>
+      {(view==="results"||isTeamHistory||!m.finished)&&<span className="history-fixture-meta"><span>{displayDate(m.date)}</span><span>{kickoffTime(m.date)}</span>{showRowMatchday&&m.week>0&&<span className="fixture-matchday">MATCHDAY {m.week}</span>}</span>}
+      <span className="match-teams"><span className="home-team"><span><span className="desktop-team-name">{data!.fullTeamNames?.[m.home] ?? shortHome}</span><span className="mobile-team-name">{shortHome}</span></span><Badge name={m.home} logos={data!.logos}/></span>
+        <strong className="match-score">{m.finished?<>{m.homeGoals??"\u2014"} <span>&ndash;</span> {m.awayGoals??"\u2014"}</>:"vs"}</strong>
+        <span className="away-team"><Badge name={m.away} logos={data!.logos}/><span><span className="desktop-team-name">{data!.fullTeamNames?.[m.away] ?? shortAway}</span><span className="mobile-team-name">{shortAway}</span></span></span></span>
+      <span className="match-total">{view==="results"?<span className="fixture-status finished">{t("dash.fullTime").toUpperCase()}</span>:m.finished&&m.homeGoals!==null&&m.awayGoals!==null?<b className="goal-total">{m.homeGoals+m.awayGoals} {m.homeGoals+m.awayGoals===1?"goal":"goals"}</b>:<span className={"fixture-status "+m.status}>{canPreview?"Preview":fixtureLabel(m)}</span>}{canPreview&&<ChevronRight size={15}/>}</span>
+      {view!=="upcoming"&&<span className="fixture-venue">{view!=="results"&&<span className="fixture-stadium"><StadiumIcon team={m.home} stadiums={data!.stadiums}/><span>{m.venue||"Venue unavailable"}</span></span>}{m.attendance!==null&&<span className="fixture-attendance" aria-label={"Attendance: "+m.attendance.toLocaleString("en-GB")}><Users size={11}/>{m.attendance.toLocaleString("en-GB")}</span>}</span>}
+    </button>};
+    return <section className={"panel results-panel"+(view==="results"?" results-list-page":"")}>
+      <div className="panel-heading"><div>
+        <h2>{selectedTeam?selectedTeam.name:week==="all"?t("dash.allMatchdays"):week?matchdayText(Number(week)):effectiveMode==="upcoming"?t("dash.upcomingFixtures"):t("dash.results")}</h2>
+        <p className="match-range">{isTeamHistory?displaySeason(data!.season)+"   ·   "+visible.length+(effectiveMode==="upcoming"?" upcoming matches":" played matches"):matchdayDates(visible)}</p>
+      </div>{isTeamHistory?<button className="text-button" onClick={()=>setTeamId(null)}><X size={13}/> {t("dash.clearTeamFilter")}</button>:view==="overview"?<button className="text-button" onClick={()=>selectView("results")}>{t("dash.viewResults")} <ArrowRight size={15}/></button>:null}</div>
+      {isTeamHistory&&<p className="team-history-note">{seasonPartText(seasonPart)}   ·   {venueText(venue)}   ·   {periodText(period)}</p>}
+      <div className="match-list">
+        {!visible.length&&<div className="empty"><Search size={24}/><p>{!query&&!teamId&&effectiveMode==="upcoming"?"No upcoming fixtures in this selection.":!query&&!teamId?"No results in this selection.":"No matches match these filters."}</p><button className="text-button" onClick={()=>{setQuery("");setTeamId(null);setSeasonPart("all");setPeriod("ft");setVenue("all");setWeek(String(defaultMatchday(data?.matches??[],effectiveMode)??""));}}>{t("dash.clearFilters")}</button></div>}
+      {view==="results" ? (()=>{const shownMatchdays=new Set<number>();return dateGroups.map(group=>{const groupMatchday=group.matches[0]?.week??0;const showHeader=showMatchdayHeaders&&groupMatchday>0&&!shownMatchdays.has(groupMatchday);if(showHeader)shownMatchdays.add(groupMatchday);return <div className="match-date-group" key={group.key}>
+          {showHeader&&<div className="matchday-heading">{matchdayText(groupMatchday)}</div>}
+          {group.matches.length>0&&<h3 className="match-date-heading">{fixtureDateHeading(group.matches[0].date,locale)}{isTeamHistory&&group.matches.every(match=>match.week===group.matches[0].week)&&group.matches[0].week>0&&<span className="fixture-matchday">{matchdayText(group.matches[0].week)}</span>}</h3>}
+          {group.matches.map(match=>renderFixture(match,isTeamHistory&&group.matches.some(other=>other.week!==match.week)))}
+         </div>})})() : visible.map(match=>renderFixture(match))}
+      </div>
+      <div className="panel-footer"><span className="status-dot"/><span>{effectiveMode==="upcoming"?"Upcoming fixtures":periodText(period)}</span></div>
+    </section>;
+  }
+
+  function renderTable(full=false) {
+    // The full standings table includes the same detailed columns as the
+    // other full-table views, including the calculated last-five form.
+    const detailed=full;
+    const seasonConfig=data?.seasonConfigs?.find(config=>config.season===data.season);
+    const configuredOutcomes=seasonConfig?.summary?.outcomes ?? seasonConfig?.outcomes ?? [];
+    const hasVerifiedClassifications=configuredOutcomes.length>0;
+    const showZones=full&&view==="standings"&&venue==="all"&&period==="ft"&&seasonPart==="all"&&standingsFrom===1&&standingsTo===seasonMatchdayCount&&(hasVerifiedClassifications||!seasonConfig);
+    const unavailable=tableMatches.filter(m=>m.finished).length-completed(tableMatches).length;
+    const zoneFor=(position:number, teamId:number)=>{
+      if(!showZones)return null;
+      const outcomes=configuredOutcomes.filter(outcome=>outcome.teamIds.includes(teamId));
+      const explicit=outcomes.find(outcome=>outcome.type==="champion") ?? outcomes.find(outcome=>outcome.type==="qualification") ?? outcomes.find(outcome=>outcome.type==="relegation_playoff") ?? outcomes.find(outcome=>outcome.type==="relegated") ?? outcomes.find(outcome=>outcome.type==="promoted");
+      if(explicit){
+        if(explicit.type==="champion")return {label:t("dash.champions"),className:"champions"};
+        if(explicit.type==="relegated")return {label:t("dash.relegated"),className:"relegated"};
+        if(explicit.type==="relegation_playoff")return {label:t("dash.relegationPlayoff"),className:"relegation-playoff"};
+        if(explicit.type==="promoted")return {label:t("dash.promoted"),className:"promoted"};
+        const competition=explicit.competitionId??"";
+        if(competition.includes("champions"))return {label:explicit.label??t("dash.championsLeague"),className:"champions-league"};
+        if(competition.includes("conference"))return {label:explicit.label??t("dash.conferenceLeague"),className:"conference-league"};
+        return {label:explicit.label??t("dash.europaLeague"),className:"europa-league"};
+      }
+      if(hasVerifiedClassifications)return null;
+      if(position===1)return {label:t("dash.champions"),className:"champions"};
+      if(position<=4)return {label:t("dash.championsLeague"),className:"champions-league"};
+      if(position===5)return {label:t("dash.europaLeague"),className:"europa-league"};
+      if(position===6)return {label:t("dash.conferenceLeague"),className:"conference-league"};
+      if(position===16)return {label:t("dash.relegationPlayoff"),className:"relegation-playoff"};
+      if(position>=17)return {label:t("dash.relegated"),className:"relegated"};
+      return null;
+    };
+    return <section className={"panel league-panel"+(full?" expanded":"")}>
+      <div className="panel-heading"><div><h2>{period==="ft"?t("dash.seasonStandings"):t("dash.standingsForPeriod",{period:periodText(period)})}</h2>
+        <p className="match-range">{displaySeason(data!.season)}   ·   {seasonPartText(seasonPart)}   ·   {venueText(venue)}{view==="standings"?"   ·   MD "+standingsFrom+" to "+standingsTo:""}</p></div><Trophy size={19} className="muted"/></div>
+      <div className="table-scroll"><table><thead><tr><th scope="col">#</th><th scope="col">{t("dash.club")}</th><th scope="col">{t("dash.matchesPlayed")}</th><th className="mobile-priority-column" scope="col">{t("dash.goalDifference")}</th><th className="mobile-priority-column" scope="col">{t("dash.points")}</th><th scope="col">{t("dash.wins")}</th><th scope="col">{t("dash.draws")}</th><th scope="col">{t("dash.losses")}</th>{detailed&&<><th scope="col">{t("dash.goalsFor")}</th><th scope="col">{t("dash.goalsAgainst")}</th></>}<th scope="col">{t("dash.goalDifference")}</th><th scope="col">{t("dash.points")}</th>{detailed&&<th scope="col">{t("standings.form")}</th>}</tr></thead>
+        <tbody>{teams.map(t=>{const position=tableTeams.indexOf(t)+1;const zone=zoneFor(position,t.id);return <tr key={t.id} className={zone?`standing-zone-${zone.className}`:undefined}><td><span className={"rank "+(position<=4?"top ":"")+(zone?.className??"")} title={zone?.label}>{position}</span></td><td><button className="club-link" onClick={()=>{setTeamId(t.id);setQuery("");setWeek("all");setView("results");}}><Badge name={t.name} logos={data!.logos}/><span className="desktop-team-name">{data!.fullTeamNames?.[t.name] ?? t.name}</span><span className="mobile-team-name">{data!.shortTeamNames?.[String(t.id)] ?? abbreviate(t.name)}</span></button></td><td>{t.played}</td><td className="mobile-priority-column">{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="mobile-priority-column points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td><td>{t.won}</td><td>{t.drawn}</td><td>{t.lost}</td>{detailed&&<><td>{t.gf}</td><td>{t.ga}</td></>}<td>{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td>{detailed&&<td><Form values={t.form}/></td>}</tr>})}</tbody></table></div>
+      {!teams.length&&<p className="empty">No clubs match your search.</p>}
+      <div className="panel-footer">{!full&&<button className="text-button" onClick={()=>selectView("standings")}>{t("dash.fullStandings")} <ArrowRight size={13}/></button>}</div>
+      {showZones&&<div className="standings-legend" aria-label={t("dash.qualificationPlaces")}><span className="legend-champions">{t("dash.champions")}</span><span className="legend-champions-league">{t("dash.championsLeague")}</span><span className="legend-europa-league">{t("dash.europaLeague")}</span><span className="legend-conference-league">{t("dash.conferenceLeague")}</span><span className="legend-relegation-playoff">{t("dash.relegationPlayoff")}</span><span className="legend-relegated">{t("dash.relegated")}</span></div>}
+      {unavailable>0&&<p className="coverage-note">{unavailable} played matches have no imported {periodText(period).toLowerCase()} score. They are excluded from this table.</p>}
+    </section>;
+  }
+
+  function renderOverview() {
+    const trendOptions:{id:LeagueTrendMetric;label:string;percent?:boolean}[]=[
+      {id:"goals",label:t("dash.metric.goals")},{id:"shots",label:t("dash.metric.shots")},{id:"shotsOnTarget",label:t("dash.metric.shotsOnTarget")},
+      {id:"corners",label:t("dash.metric.corners")},{id:"yellowCards",label:t("dash.metric.yellowCards")},{id:"fouls",label:t("dash.metric.fouls")}
+    ];
+    const selectedTrend=trendOptions.find(option=>option.id===overviewMetric)!;
+    const standingHeader=<div className="overview-table-header"><span>#</span><span>Club</span><span>MP</span><span>GD</span><span>Pts</span></div>;
+    const standingRow=(team:Team,index:number)=><button key={team.id} onClick={()=>{setTeamId(team.id);setView("results");}}><span className="rank">{index+1}</span><Badge name={team.name} logos={data!.logos}/><strong>{data!.shortTeamNames?.[String(team.id)] ?? abbreviate(team.name)}</strong><span>{team.played}</span><span>{team.gf-team.ga>0?"+":""}{team.gf-team.ga}</span><b>{team.points}</b></button>;
+    return <div className="overview-dashboard">
+      <div className="overview-summary-cards overview-summary-cards-main" aria-label="Latest matchday summary">
+        <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.totalGoals")}</span><strong className="overview-kpi-value">{overviewResults.length?overviewSummary.goals:"-"}</strong><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
+        <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.averageAttendance")}</span><strong className="overview-kpi-value">{overviewSummary.attendanceAverage===null?"-":Math.round(overviewSummary.attendanceAverage).toLocaleString("en-GB")}</strong><small className="overview-kpi-description">{overviewSummary.attendanceReported?t("dash.attendanceCoverage",{reported:overviewSummary.attendanceReported,total:overviewResults.length}):t("dash.attendanceUnavailable")}</small></div>
+        <div className="overview-summary-card overview-kpi-card home-results-card"><span className="overview-kpi-label">{t("dash.homeResults")}</span><strong className="overview-kpi-value"><b>{t("dash.wins")} {overviewSummary.homeResults.won}</b><b>{t("dash.draws")} {overviewSummary.homeResults.drawn}</b><b>{t("dash.losses")} {overviewSummary.homeResults.lost}</b></strong><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
+      </div>      <div className="overview-top-grid">
+        <section className="panel overview-results">
+          <div className="panel-heading"><div><span className="eyebrow">{t("dash.latestResults")}</span><h2>{latestCompletedWeek?matchdayText(latestCompletedWeek):t("dash.noCompletedMatchday")}</h2><p className="match-range">{matchdayDates(overviewResults,locale)}{overviewScheduled>0?t("dash.fixtureStillToPlay",{count:overviewScheduled}):""}</p></div><button className="text-button" onClick={()=>selectView("results")}>{t("dash.viewAllResults")} <ArrowRight size={13}/></button></div>
+          <div className="overview-results-list">{overviewResults.map(match=><button key={match.id} className="overview-result" onClick={()=>setSelected(match)}>
+  <div className="overview-result-main">
+    <span className="overview-club home"><span>{data!.shortTeamNames?.[String(match.homeId)] ?? abbreviate(match.home)}</span><Badge name={match.home} logos={data!.logos}/></span>
+    <strong>{match.homeGoals} <span>&ndash;</span> {match.awayGoals}</strong>
+    <span className="overview-club away"><Badge name={match.away} logos={data!.logos}/><span>{data!.shortTeamNames?.[String(match.awayId)] ?? abbreviate(match.away)}</span></span>
+  </div>
+  
+</button>)}</div>
+          {!overviewResults.length&&<p className="empty">{t("dash.noCompletedMatches")}</p>}
+        </section>
+        <section className="panel overview-standings">
+          <div className="panel-heading"><div><span className="eyebrow">{t("dash.leagueStandings")}</span><h2>{t("dash.currentTable")}</h2><p className="match-range">{t("dash.completedFixtures")}</p></div><button className="text-button" onClick={()=>selectView("standings")}>{t("dash.fullStandings")} <ArrowRight size={13}/></button></div>
+           <div className="overview-table"><div className="overview-table-rows"><div className="overview-table-half">{standingHeader}{overviewTable.slice(0,9).map((team,index)=>standingRow(team,index))}</div><div className="overview-table-half">{standingHeader}{overviewTable.slice(9).map((team,index)=>standingRow(team,index+9))}</div></div></div>
+        </section>
+      </div>
+      <section className="panel overview-trends">
+        <div className="panel-heading"><div><span className="eyebrow">{t("dash.seasonTrends")}</span><h2>{selectedTrend.label}</h2><p className="match-range">{t("dash.leagueCompleted")}</p></div></div>
+        <div className="trend-switch" aria-label="Season trend metric">{trendOptions.map(option=><button key={option.id} className={overviewMetric===option.id?"active":""} onClick={()=>setOverviewMetric(option.id)}>{option.label}</button>)}</div>
+        <div className="trend-summary" aria-label={`${selectedTrend.label} summary`}><div><span>{t("dash.seasonAverage")}</span><strong>{overviewTrendSummary.average===null?"?":overviewTrendSummary.average.toFixed(selectedTrend.percent?1:2)+(selectedTrend.percent?"%":"")}</strong><small>{t("dash.eligibleCompleted")}</small></div><div><span>{t("dash.latestMatchdayLabel")}</span><strong>{overviewTrendSummary.latest===null?"?":overviewTrendSummary.latest.toFixed(selectedTrend.percent?1:2)+(selectedTrend.percent?"%":"")}</strong><small>{overviewTrend.length?matchdayText(overviewTrend.at(-1)!.week):"No completed matchday"}</small></div></div>
+        <LeagueTrendChart points={overviewTrend} label={selectedTrend.label} percentValue={selectedTrend.percent}/>
+      </section>
+    </div>;
+  }
+
+  if(isMatchReport)return null;
+  return <div className="app-shell">
+    <aside className="sidebar">
+      <a className="brand" href="/" aria-label="Bundesliga analytics home"><img className="brand-logo" src="/brand/bundesliga-mark.svg" alt="Bundesliga logo" width={46} height={37}/><span>Bundesliga<b>FOOTBALL ANALYTICS</b></span></a>
+      <span className="sidebar-label">{t("global.workspace")}</span>
+      <nav aria-label={t("nav.overview")}>{navigation.map(item=><button key={item.id} onClick={()=>selectView(item.id)} className={view===item.id?"active":""} aria-current={view===item.id?"page":undefined}><item.icon size={19}/><span>{t(`nav.${item.id}`)}</span>{view===item.id&&<span className="nav-indicator"/>}</button>)}</nav>
+      <div className="sidebar-bottom"><span className="database-icon"><Database size={17}/></span><div>{t("global.poweredBy")}<small>{t("global.sourceData")}</small></div></div>
+    </aside>
+    <div className="main-shell">
+      <header className="topbar"><div className="breadcrumb"><img className="header-league-mark" src="/brand/bundesliga-mark.svg" alt="" width={25} height={20}/><span>Bundesliga</span><ChevronRight size={13}/><strong>{view==="teamAnalysis"?t("teamAnalysis.title"):t(`nav.${view}`)}</strong></div>
+        <div className="topbar-actions"><SettingsMenu/></div>
+      </header>
+      <main id="main">
+        <div className="page-heading"><div><span className="eyebrow"><span className="germany-flag"/> {t("global.germany")} · {t("global.bundesliga")}</span><h1>{view==="teamAnalysis"?t("teamAnalysis.title"):t(`page.${view}`)}</h1><p>{view==="overview"?shortSeason(data?.season||""):(view==="teams"||view==="players")?t("global.developing"):view==="history"?t("page.historyDescription"):view==="teamAnalysis"?t("teamAnalysis.subtitle"):view==="results"?t("page.resultsDescription"):t("page.description")}</p></div>
+
+        </div>
+
+        {view!=="overview"&&view!=="teams"&&view!=="players"&&view!=="teamAnalysis"&&view!=="history"&&<div className={"filter-bar"+(view==="results"?" results-toolbar":"")+(view==="standings"?(standingsFiltersOpen?" standings-filter-bar filters-open":" standings-filter-bar"):"")} role="group" aria-label={view==="upcoming"?"Upcoming matchday filter":"Season and matchday filters"}>
+          {view==="standings"&&<button type="button" className="standings-filter-toggle" aria-expanded={standingsFiltersOpen} onClick={()=>setStandingsFiltersOpen(value=>!value)}><span>Filters &middot; {shortSeason(season||data?.season||"")} &middot; MD {standingsFrom}&#8211;{standingsTo}</span><ChevronDown size={16}/></button>}
+          <div className="standings-filter-fields">
+          {view!=="upcoming"&&<div className="filter-field">
+            <label htmlFor="season-filter">{t("dash.season")}</label>
+            <div className="season-selector"><CalendarDays size={16}/>
+              <select id="season-filter" aria-label={t("dash.season")} value={season||data?.season||""}
+                onChange={e=>{setWeek("");setTeamId(null);setSeason(e.target.value);}} disabled={!data||loading}>
+                {!data&&<option>Loading...</option>}
+                {data?.seasons.map(s=><option key={s} value={s}>{displaySeason(s)}</option>)}
+              </select><ChevronDown size={14}/>
+            </div>
+          </div>}
+          {view!=="standings"&&<div className="filter-field matchday-field">
+            <label htmlFor="matchday-filter">{t("dash.matchday")}</label>
+            <div className="matchday-controls">
+              <button className="matchday-step" aria-label="Previous matchday" disabled={loading||!week||weekIndex<=0}
+                onClick={()=>setWeek(String(weeks[weekIndex-1]))}><ChevronLeft size={17}/></button>
+              <div className="season-selector"><select id="matchday-filter" aria-label={t("dash.matchday")} value={week}
+                onChange={e=>setWeek(e.target.value)} disabled={!data||loading}>
+                {!data&&<option value="">Loading matchdays...</option>}{view==="results"&&<option value="all">{t("dash.allMatchdays")}</option>}
+                {weeks.map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
+              </select><ChevronDown size={14}/></div>
+              <button className="matchday-step" aria-label="Next matchday" disabled={loading||!week||weekIndex<0||weekIndex>=weeks.length-1}
+                onClick={()=>setWeek(String(weeks[weekIndex+1]))}><ChevronRight size={17}/></button>
+              {view==="results"&&<button className="latest-matchday" onClick={()=>setWeek(String(preferredWeek??weeks.at(-1)??""))} disabled={loading||!weeks.length}>{t("dash.latest")}</button>}
+            </div>
+          </div>}
+
+          {view==="standings"&&<>
+            <div className="filter-field"><label htmlFor="standings-from">{t("filters.fromMatchday")}</label><div className="season-selector">
+              <select id="standings-from" aria-label={t("filters.fromMatchday")} value={standingsFrom} onChange={e=>{const next=Number(e.target.value);setStandingsFrom(next);setStandingsTo(previous=>Math.max(previous,next));}}>
+                {Array.from({length:seasonMatchdayCount},(_,i)=>i+1).map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
+              </select><ChevronDown size={14}/></div></div>
+            <div className="filter-field"><label htmlFor="standings-to">{t("filters.toMatchday")}</label><div className="season-selector">
+              <select id="standings-to" aria-label={t("filters.toMatchday")} value={standingsTo} onChange={e=>{const next=Number(e.target.value);setStandingsTo(next);setStandingsFrom(previous=>Math.min(previous,next));}}>
+                {Array.from({length:seasonMatchdayCount},(_,i)=>i+1).map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
+              </select><ChevronDown size={14}/></div></div>
+          </>}
+          {view!=="upcoming"&&view!=="results"&&<div className="filter-field venue-field">
+            <label htmlFor="venue-filter">{t("filters.venue")}</label>
+            <div className="season-selector"><select id="venue-filter" aria-label={t("filters.venue")} value={venue} onChange={e=>setVenue(e.target.value as VenueFilter)}>
+              <option value="all">{t("filters.allVenues")}</option><option value="home">{t("filters.home")}</option><option value="away">{t("filters.away")}</option>
+            </select><ChevronDown size={14}/></div>
+          </div>}
+          {view!=="upcoming"&&view!=="results"&&<div className="filter-field">
+            <label htmlFor="season-part-filter">{t("filters.seasonPhase")}</label>
+            <div className="season-selector"><select id="season-part-filter" aria-label={t("filters.seasonPhase")} value={seasonPart} onChange={e=>setSeasonPart(e.target.value as SeasonPart)}>
+              <option value="all">{t("filters.fullSeason")}</option><option value="first">{t("filters.firstHalf")}</option><option value="second">{t("filters.secondHalf")}</option>
+            </select><ChevronDown size={14}/></div>
+          </div>}
+          {view!=="upcoming"&&view!=="results"&&!historicalSeason&&<div className="filter-field">
+            <label htmlFor="period-filter">{t("filters.matchPeriod")}</label>
+            <div className="season-selector"><select id="period-filter" aria-label={t("filters.matchPeriod")} value={period} onChange={e=>{setSelected(null);setPeriod(e.target.value as MatchPeriod);}}>
+              {PERIODS.map(p=><option value={p.value} key={p.value}>{periodText(p.value)}</option>)}
+            </select><ChevronDown size={14}/></div>
+          </div>}
+          {view!=="upcoming"&&view!=="results"&&data&&!loading&&!error&&<div className="filter-context" role="status">
+            <span className="status-dot"/><span>{view==="standings"?matchdayRangeText(standingsFrom,standingsTo):isTeamHistory?seasonPartText(seasonPart):matchdayText(Number(week))}</span>
+            {view!=="standings"&&!isTeamHistory&&week!==String(preferredWeek??"")&&<button className="text-button" onClick={()=>setWeek(String(preferredWeek??""))}>{effectiveMode==="upcoming"?"Next fixture":"Latest"} <ChevronRight size={12}/></button>}
+            {view==="standings"&&<button className="text-button" onClick={()=>{setStandingsFrom(1);setStandingsTo(seasonMatchdayCount);setSeasonPart("all");setPeriod("ft");setVenue("all");setQuery("");}}>{t("dash.resetStandings")}</button>}
+          </div>}
+          </div>
+        </div>}
+        <div aria-live="polite">
+          {loading ? <div className="loading-state"><LoaderCircle className="spin" size={29}/><h2>Reading the game...</h2><p>Loading imported Bundesliga results and statistics.</p><div className="skeleton-grid">{[1,2,3,4].map(i=><div className="skeleton" key={i}/>)}</div></div>:
+          error ? <section className="error-state"><Database size={30}/><h2>Let's connect your data.</h2><p>{error}</p><button className="primary-button" onClick={()=>setRevision(v=>v+1)}><RefreshCw size={16}/> Try again</button></section>:
+          data && (((view as string)==="teams"||(view as string)==="players") ? (view==="teams" ? <section className="team-directory"><div className="team-directory-grid">{data.teams.map(team=><button type="button" className="panel team-directory-card" key={team.id} onClick={()=>router.push(`/teams/${team.id}`)}><Badge name={team.name} logos={data.logos} large/><strong>{data.fullTeamNames?.[team.name] ?? team.name}</strong><span>{t("teamAnalysis.openAnalysis")}</span><ChevronRight size={15}/></button>)}</div></section> : <DevelopmentPage title={allNavigation.find(item=>item.id===view)?.label??"Page"}/>) : <>
+            {missingPeriod>0&&<p className="coverage-note" role="status">{missingPeriod} played matches in this selection have no imported {periodText(period).toLowerCase()} score. Goal summaries exclude them.</p>}
+            {view!=="overview"&&view!=="standings"&&view!=="results"&&view!=="teamAnalysis"&&view!=="history"&&effectiveMode!=="upcoming"&&<div className="metric-grid">
+              {[
+                {label:"Total goals",value:missingPeriod>0&&!summary.played?"?":summary.goals.toLocaleString("en-GB"),note:summary.played+" matches   ·   "+periodText(period),icon:Goal},
+                {label:"Goals per game",value:missingPeriod>0&&!summary.played?"?":summary.average.toFixed(2),note:isTeamHistory||venue==="all"?"Combined home and away goals":venue==="home"?"Home-team goals":"Away-team goals",icon:Activity},
+                {label:"Average attendance",value:attendance.average===null?"?":Math.round(attendance.average).toLocaleString("en-GB"),note:attendance.count+" of "+attendance.matches+" matches reported",icon:Users},
+                {label:isTeamHistory?"Team W"+String.fromCharCode(8211)+"D"+String.fromCharCode(8211)+"L":venue==="away"?"Away W"+String.fromCharCode(8211)+"D"+String.fromCharCode(8211)+"L":"Home W"+String.fromCharCode(8211)+"D"+String.fromCharCode(8211)+"L",value:missingPeriod>0&&!summary.played?"?":homeRecord.wins+" "+String.fromCharCode(8211)+" "+homeRecord.draws+" "+String.fromCharCode(8211)+" "+homeRecord.losses,note:isTeamHistory?"Wins   ·   Draws   ·   Losses":venue==="away"?"Away wins   ·   Draws   ·   Away losses":"Home wins   ·   Draws   ·   Home losses",icon:Trophy}
+              ].map((metric,i)=><section className={"metric-card"+(i===3?" accent":"")} key={metric.label}><div><span>{metric.label}</span><metric.icon size={18}/></div><strong>{metric.value}</strong><small>{i===3&&<span className="status-dot"/>}{metric.note}</small></section>)}
+            </div>}
+            {(view as string)==="goals"&&<div className="toolbar"><div className="view-tabs" aria-label="Dashboard sections">{navigation.map(item=><button key={item.id} className={view===item.id?"selected":""} onClick={()=>selectView(item.id)}>{item.label}</button>)}</div>
+              <label className="search-box"><Search size={15}/><input placeholder="Search a club..." aria-label="Search clubs" value={query} onChange={e=>setQuery(e.target.value)}/>{query&&<button className="icon-button" aria-label="Clear search" onClick={()=>setQuery("")}><X size={13}/></button>}</label>
+            </div>}
+            {view==="overview" && renderOverview()}
+            {view==="history" && <BundesligaHistory data={data} />}
+            {(view==="results"||view==="upcoming") && renderResults()}
+            {view==="standings" && renderTable(true)}
+            {view==="teamAnalysis" && teamAnalysisId !== null && <TeamAnalysis data={data} teamId={teamAnalysisId} season={data.season} onSeasonChange={next=>{setSeason(next);setTeamId(teamAnalysisId);}} onBack={()=>router.push("/teams")} />}
+
+            {(view==="players"||view==="predictions")&&<section className="panel coming-soon"><span className="eyebrow">ROADMAP</span><h2>{view==="players"?"Player analytics":"Predictions"}</h2><p>This page is prepared in navigation and will be developed in its scheduled phase.</p></section>}
+            {view==="goals" && <div className="dashboard-grid">
+              <div className="wide-column">
+                <section className="panel">
+                  <div className="panel-heading"><div><span className="eyebrow">SCORING PATTERNS</span><h2>Goals per match</h2></div></div>
+                  <div className="goal-histogram" role="img" aria-label={"Goal distribution across "+summary.played+" completed matches"}>
+                    {distribution.map(bucket=><div className="goal-bucket" key={bucket.label}>
+                      <span className="bucket-count">{bucket.count}</span>
+                      <div className="bucket-track"><span style={{height:bucket.count/Math.max(1,...distribution.map(b=>b.count))*100+"%"}}/></div>
+                      <strong>{bucket.label}</strong><small>goals</small>
+                    </div>)}
+                  </div>
+                  <p className="histogram-note">Recorded results{week!=="all"?"   ·   Matchday "+week:""}</p>
+                </section>
+                
+              </div>
+              <div className="narrow-column">
+                <section className="panel"><div className="panel-heading"><div><span className="eyebrow">ATTACKING OUTPUT</span><h2>Leading scorers</h2></div></div>
+                  <div className="scorers">{ranked.map(t=><button key={t.id} onClick={()=>{setTeamId(t.id);setView("results");}}><Badge name={t.name} logos={data.logos}/><span>{abbreviate(t.name)}<small>{t.played} matches played</small></span><b>{(t.gf/t.played).toFixed(2)}<small>goals / match</small></b></button>)}</div>
+                </section>
+              </div>
+            </div>}
+
+
+            {view==="goals"&&<section className="panel trend-panel trend-wide">
+              <div className="panel-heading"><div><span className="eyebrow">SCORING PATTERNS</span><h2>Average goals by matchday</h2><p className="match-range">{seasonPartText(seasonPart)}   ·   {periodText(period)}   ·   {venueText(venue)}</p></div><span className="legend"><i/> Goals / match</span></div>
+              <TrendChart matches={historyMatches} venue={venue}/>
+            </section>}
+
+            <footer className="page-footer">{isTeamHistory&&<span><span className="status-dot"/> {selectedTeam?.name}   ·   Full season</span>}<span>Updated {new Date(data.fetchedAt).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit"})}   ·   Refresh as results progress</span></footer>
+          </>)}
+        </div>
+      </main>
+    </div>
+    <nav className="mobile-nav" aria-label="Mobile navigation" style={{gridTemplateColumns:"repeat("+navigation.length+",minmax(0,1fr))"}}>{navigation.map(item=><button key={item.id} className={view===item.id?"active":""} onClick={()=>selectView(item.id)} aria-current={view===item.id?"page":undefined}><item.icon size={20}/><span>{item.label}</span></button>)}</nav>
+    {selected&&data&&<MatchDialog match={selected} data={data} period={period} onClose={()=>setSelected(null)}/>}
+  </div>;
+}
+
+
+
+
+
+
+
+
+
