@@ -1,6 +1,8 @@
-# Bundesliga Analytics
+# Bundesliga Intelligence
 
-A mobile-first Next.js app backed by the separate Bundesliga MongoDB instance.
+A responsive Next.js analytics dashboard backed by the separate Bundesliga MongoDB instance.
+
+The app provides modern and historical Bundesliga analysis using imported WhoScored data.
 
 ## Run
 
@@ -23,6 +25,16 @@ Refresh the dashboard as imports progress.
 - All-club season standings with MP, W, D, L, goal difference and points; the Teams tab adds GF, GA and form.
 - Compact club histories containing every imported played fixture in the chosen season phase and venue.
 - Goals, goals per game, reported attendance and W-D-L summaries.
+
+## Additional features
+
+- Historical season summaries, achievements, and European qualification history.
+- Historical competition ordering including European Cup, Champions League, Cup Winners' Cup, Fairs Cup, UEFA Cup, Europa League, and Conference League.
+- Match reports with lineups, player statistics, events, shots, and formations.
+- Team comparisons, performance charts, and sequence visualizations.
+- Team and stadium logos read from the MongoDB `available_teams` collection.
+- English, German, Spanish, and Romanian interface translations.
+- Responsive desktop and mobile layouts.
 - Full-width scoring trends and goal-distribution charts.
 - Stadium icons, venue names, attendance and match-stat comparisons.
 - No predictions, odds analysis or over/under panels.
