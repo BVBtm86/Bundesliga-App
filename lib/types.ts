@@ -86,7 +86,7 @@ export type SeasonConfig = {
 };
 export type Dashboard = {
   seasons: string[]; season: string; matches: Match[]; teams: Team[];
-  stats: MatchStats[]; fullTeamNames?: Record<string,string>; shortTeamNames?: Record<string,string>; historicalMatches: Match[]; logos: Record<string,string>; stadiums: Record<string,string>; goalscorers: Record<string, Array<{teamId:number; playerName:string|null; minute:number|null; addedTime:number; subtype:string|null}>>; fetchedAt: string;
+  stats: MatchStats[]; fullTeamNames?: Record<string,string>; shortTeamNames?: Record<string,string>; historicalMatches: Match[]; historicalPositions?: Array<{season:string; clubId:number; clubName:string; position:number; participants:number; status:"bundesliga"; champion:boolean; points:number; played:number; won:number; drawn:number; lost:number; goalsFor:number; goalsAgainst:number; goalDifference:number}>; logos: Record<string,string>; stadiums: Record<string,string>; goalscorers: Record<string, Array<{teamId:number; playerName:string|null; minute:number|null; addedTime:number; subtype:string|null}>>; fetchedAt: string;
   teamLocations?: TeamLocation[];
   seasonConfigs?: SeasonConfig[];
 };

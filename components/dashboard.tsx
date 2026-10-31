@@ -8,7 +8,7 @@ import { Activity, ArrowRight, BarChart3, CalendarClock, CalendarDays, ListCheck
 import { useI18n, type Locale } from "@/lib/i18n";
 import SettingsMenu from "./settings-menu";
 import { completed, goalSummary, goalTrend, leagueTrend, standings } from "@/lib/analytics";
-import type { LeagueTrendMetric } from "@/lib/analytics";
+import type { LeagueTrendMetric, LeagueTrendPoint } from "@/lib/analytics";
 import { defaultMatchday, fixturesForMode, PERIODS, periodLabel as rawPeriodLabel, seasonPartLabel, venueLabel, seasonSubset, scoresForPeriod, statsForPeriod, teamVenueMatches } from "@/lib/filters";
 import type { FixtureMode } from "@/lib/filters";
 import type { Dashboard as Data, Match, MatchPeriod, SeasonPart, Team, TimelineEvent, VenueFilter } from "@/lib/types";
@@ -97,10 +97,10 @@ function LeagueTrendChart({points,label,percentValue}:{points:{week:number;playe
   const min=Math.max(0,observedMin-padding);
   const max=percentValue?Math.min(100,observedMax+padding):observedMax+padding;
   const range=Math.max(.01,max-min);
-  const pointsString=points.map((point,index)=>`${32+index*596/Math.max(1,points.length-1)},${175-((point.value??min)-min)/range*140}`).join(" ");
+  const pointsString=points.map((point,index)=>`${54+index*1218/Math.max(1,points.length-1)},${250-((point.value??min)-min)/range*200}`).join(" ");
   const tooltipCount=(count:number)=>count===1?t("dash.tooltipMatches.one",{count}):t("dash.tooltipMatches.other",{count});
-  return <div className="trend-chart"><svg viewBox="0 0 660 214" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
-    {[0,1,2,3,4].map(index=><g key={index}><line x1="32" x2="628" y1={175-index*35} y2={175-index*35} stroke="#465360" strokeDasharray="3 5"/><text x="8" y={179-index*35} fill="#a9b8c5" fontSize="10">{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
+  return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
+    {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50} stroke="#465360" strokeDasharray="3 5"/><text x="18" y={254-index*50} fill="#a9b8c5" fontSize="10">{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
     <polyline points={pointsString} fill="none" stroke="var(--accent)" strokeWidth="2.5" strokeLinejoin="round"/>
     {points.map((point,index)=><g key={point.week}><circle cx={32+index*596/Math.max(1,points.length-1)} cy={175-((point.value??min)-min)/range*140} r="3" fill="#29323c" stroke="var(--accent)" strokeWidth="2"><title>{t("dash.matchdayLabel",{number:point.week})}: {point.value===null?t("dash.tooltipUnavailable"):point.value.toFixed(percentValue?1:2)+(percentValue?"%":"")} · {label} · {tooltipCount(point.played)}{point.scheduled?` · ${t("dash.tooltipStillToPlay",{count:point.scheduled})}`:""}</title></circle>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text x={32+index*596/Math.max(1,points.length-1)} y="201" textAnchor="middle" fill="#a9b8c5" fontSize="10">{point.week}</text>}</g>)}
   </svg><div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
@@ -112,6 +112,67 @@ function matchdayDates(matches:Match[],locale:Locale="en") {
   if (!dates.length) return "Dates unavailable";
   const first=displayDate(dates[0],locale),last=displayDate(dates[dates.length-1],locale);
   return first===last?first:first+" "+String.fromCharCode(0x2013)+" "+last;
+}
+
+type TrendExtreme = { matches: Match[]; value: number; match: Match; ties: number };
+type TrendPointWithExtremes = LeagueTrendPoint & { highest: TrendExtreme | null; lowest: TrendExtreme | null };
+
+function LeagueTrendChartBalanced({points,label,percentValue}:{points:TrendPointWithExtremes[];label:string;percentValue?:boolean}) {
+  const {t}=useI18n();
+  const [hoveredWeek,setHoveredWeek]=useState<number|null>(null);
+  const values=points.map(point=>point.value).filter((value):value is number=>value!==null);
+  if(!values.length)return <p className="empty">{t("dash.noCompletedMatches")}</p>;
+  const observedMin=Math.min(...values),observedMax=Math.max(...values),observedRange=Math.max(.01,observedMax-observedMin),padding=Math.max(observedRange*.15,percentValue?1:.15),min=Math.max(0,observedMin-padding),max=percentValue?Math.min(100,observedMax+padding):observedMax+padding,range=Math.max(.01,max-min);
+  const x=(index:number)=>54+index*1218/Math.max(1,points.length-1),y=(value:number|null)=>250-((value??min)-min)/range*200;
+  const tooltipCount=(count:number)=>count===1?t("dash.tooltipMatches.one",{count}):t("dash.tooltipMatches.other",{count});
+  const hoveredIndex=hoveredWeek===null?-1:points.findIndex(point=>point.week===hoveredWeek),hovered=hoveredIndex>=0?points[hoveredIndex]:null;
+  const formatValue=(value:number)=>`${value.toFixed(percentValue?1:2)}${percentValue?"%":""}`;
+  const tooltipSide=hoveredIndex>=0&&hoveredIndex<points.length*.2?"left":hoveredIndex>=points.length*.8?"right":"center";
+  const extreme=(title:string,item:TrendExtreme|null)=><div className="overview-trend-extreme"><span>{title}</span>{item?<><strong>{item.match.home} {item.match.homeGoals}–{item.match.awayGoals} {item.match.away}</strong><b>{formatValue(item.value)}{item.ties>1?` · ${item.ties} tied`:""}</b></>:<em>{t("dash.tooltipUnavailable")}</em>}</div>;
+  return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
+    {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50}/><text x="18" y={254-index*50}>{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
+    <polyline points={points.map((point,index)=>`${x(index)},${y(point.value)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
+    {points.map((point,index)=><g key={point.week}><circle cx={x(index)} cy={y(point.value)} r="3.5" fill="#fff" stroke="var(--accent)" strokeWidth="1.5"><title>{t("dash.matchdayLabel",{number:point.week})}: {point.value===null?t("dash.tooltipUnavailable"):point.value.toFixed(percentValue?1:2)+(percentValue?"%":"")} · {label} · {tooltipCount(point.played)}{point.scheduled?` · ${t("dash.tooltipStillToPlay",{count:point.scheduled})}`:""}</title></circle>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text x={x(index)} y="282" textAnchor="middle">{point.week}</text>}</g>)}
+  </svg><div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
+}
+
+function LeagueTrendChartWithExtremes({points,label,percentValue}:{points:TrendPointWithExtremes[];label:string;percentValue?:boolean}) {
+  const {t}=useI18n();
+  const [hoveredWeek,setHoveredWeek]=useState<number|null>(null);
+  const values=points.map(point=>point.value).filter((value):value is number=>value!==null);
+  if(!values.length)return <p className="empty">{t("dash.noCompletedMatches")}</p>;
+  const observedMin=Math.min(...values),observedMax=Math.max(...values),padding=Math.max((observedMax-observedMin)*.15,percentValue?1:.15),min=Math.max(0,observedMin-padding),max=percentValue?Math.min(100,observedMax+padding):observedMax+padding,range=Math.max(.01,max-min);
+  const x=(index:number)=>54+index*1218/Math.max(1,points.length-1),y=(value:number|null)=>250-((value??min)-min)/range*200;
+  const formatAverage=(value:number)=>`${value.toFixed(percentValue?1:2)}${percentValue?"%":""}`;
+  const formatMatchValue=(value:number)=>`${Number.isInteger(value)?value:value.toFixed(2)}${percentValue?"%":""}`;
+  const hoveredIndex=hoveredWeek===null?-1:points.findIndex(point=>point.week===hoveredWeek),hovered=hoveredIndex>=0?points[hoveredIndex]:null;
+  const side=hoveredIndex>=0&&hoveredIndex<points.length*.2?"left":hoveredIndex>=points.length*.8?"right":"center";
+  const extreme=(title:string,item:TrendExtreme|null,distinct=true)=><div className="overview-trend-extreme"><span>{title}</span>{item?<><strong>{item.match.home} {item.match.homeGoals}–{item.match.awayGoals} {item.match.away}</strong><b>{formatMatchValue(item.value)}{item.ties>1?` · ${item.ties} tied`:!distinct?` · ${t("dash.noDistinctExtreme")}`:""}</b></>:<em>{t("dash.tooltipUnavailable")}</em>}</div>;
+  return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
+    {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50}/><text x="18" y={254-index*50}>{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
+    <polyline points={points.map((point,index)=>`${x(index)},${y(point.value)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
+    {points.map((point,index)=><g key={point.week}><circle cx={x(index)} cy={y(point.value)} r="3.5" fill="#fff" stroke="var(--accent)" strokeWidth="1.5"/><circle className="overview-trend-hit" cx={x(index)} cy={y(point.value)} r="10" fill="transparent" stroke="none" tabIndex={0} aria-label={t("dash.matchdayLabel",{number:point.week})} onMouseEnter={()=>setHoveredWeek(point.week)} onMouseLeave={()=>setHoveredWeek(null)} onFocus={()=>setHoveredWeek(point.week)} onBlur={()=>setHoveredWeek(null)}/>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text x={x(index)} y="282" textAnchor="middle">{point.week}</text>}</g>)}
+  </svg>{hovered&&<div className={`overview-trend-tooltip ${side}`}><strong>{t("dash.matchdayLabel",{number:hovered.week})}</strong><span className="overview-trend-average">{label}: <b>{hovered.value===null?t("dash.tooltipUnavailable"):formatAverage(hovered.value)}</b></span>{hovered.highest?.match.id===hovered.lowest?.match.id?extreme(`${t("dash.highest")} / ${t("dash.lowest")}`,hovered.highest,false):<>{extreme(t("dash.highest"),hovered.highest)}{extreme(t("dash.lowest"),hovered.lowest)}</>}</div>}<div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
+}
+
+function LeagueTrendChartAllExtremes({points,label,percentValue}:{points:TrendPointWithExtremes[];label:string;percentValue?:boolean}) {
+  const {t}=useI18n();
+  const [hoveredWeek,setHoveredWeek]=useState<number|null>(null);
+  const values=points.map(point=>point.value).filter((value):value is number=>value!==null);
+  if(!values.length)return <p className="empty">{t("dash.noCompletedMatches")}</p>;
+  const observedMin=Math.min(...values),observedMax=Math.max(...values),padding=Math.max((observedMax-observedMin)*.15,percentValue?1:.15),min=Math.max(0,observedMin-padding),max=percentValue?Math.min(100,observedMax+padding):observedMax+padding,range=Math.max(.01,max-min);
+  const x=(index:number)=>54+index*1218/Math.max(1,points.length-1),y=(value:number|null)=>250-((value??min)-min)/range*200;
+  const formatAverage=(value:number)=>`${value.toFixed(percentValue?1:2)}${percentValue?"%":""}`;
+  const formatMatchValue=(value:number)=>`${Number.isInteger(value)?value:value.toFixed(2)}${percentValue?"%":""}`;
+  const hoveredIndex=hoveredWeek===null?-1:points.findIndex(point=>point.week===hoveredWeek),hovered=hoveredIndex>=0?points[hoveredIndex]:null;
+  const side=hoveredIndex>=0&&hoveredIndex<points.length*.2?"left":hoveredIndex>=points.length*.8?"right":"center";
+  const section=(title:string,item:TrendExtreme|null)=><section className="overview-trend-extreme"><span>{title}{item?` · ${formatMatchValue(item.value)}`:""}</span>{item?<div className="overview-trend-matches">{item.matches.map(match=><div className="overview-trend-match" key={match.id}><span>{match.home}</span><b>{match.homeGoals}–{match.awayGoals}</b><span>{match.away}</span></div>)}</div>:<em>{t("dash.tooltipUnavailable")}</em>}</section>;
+  const allTied=Boolean(hovered?.highest&&hovered.lowest&&hovered.highest.value===hovered.lowest.value);
+  return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
+    {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50}/><text fill="var(--muted)" x="18" y={254-index*50}>{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
+    <polyline points={points.map((point,index)=>`${x(index)},${y(point.value)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
+    {points.map((point,index)=><g key={point.week}><circle cx={x(index)} cy={y(point.value)} r="3" fill="#fff" stroke="var(--accent)" strokeWidth="1.5"/><circle className="overview-trend-hit" cx={x(index)} cy={y(point.value)} r="10" fill="transparent" stroke="none" tabIndex={0} aria-label={t("dash.matchdayLabel",{number:point.week})} onMouseEnter={()=>setHoveredWeek(point.week)} onMouseLeave={()=>setHoveredWeek(null)} onFocus={()=>setHoveredWeek(point.week)} onBlur={()=>setHoveredWeek(null)}/>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text fill="var(--muted)" x={x(index)} y="282" textAnchor="middle">{point.week}</text>}</g>)}
+  </svg>{hovered&&<div className={`overview-trend-tooltip ${side}`}><strong>{t("dash.matchdayLabel",{number:hovered.week})}</strong><span className="overview-trend-average">{label}: <b>{hovered.value===null?t("dash.tooltipUnavailable"):formatAverage(hovered.value)}</b></span>{allTied?section(t("dash.allTied"),hovered.highest):<>{section(t("dash.highest"),hovered.highest)}{section(t("dash.lowest"),hovered.lowest)}</>}</div>}<div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
 }
 
 function berlinDateKey(value:string) {
@@ -144,6 +205,26 @@ function PreviewResults({matches,teamId}:{matches:Match[];teamId:number}) {
   })}</div>;
 }
 
+type HistoricalH2HResult = { id:number|string; reportId:number|null; season:string|null; date:string; homeId:number|null; awayId:number|null; home:string; away:string; homeGoals:number; awayGoals:number };
+type HistoricalH2HData = { totalMeetings:number; homeWins:number; draws:number; awayWins:number; homeGoals:number; awayGoals:number; averageGoals:number; homeWinPercentage:number; awayWinPercentage:number; results:HistoricalH2HResult[]; pagination:{hasMore:boolean;total:number} };
+
+function HistoricalHeadToHead({data,loading,error,expanded,onExpand,homeName,awayName,scope,onScopeChange}:{data:HistoricalH2HData|null;loading:boolean;error:string;expanded:boolean;onExpand:()=>void;homeName:string;awayName:string;scope:"all"|"venue";onScopeChange:(scope:"all"|"venue")=>void}) {
+  const {locale,t}=useI18n();
+  const total=(data?.homeWins??0)+(data?.draws??0)+(data?.awayWins??0);
+  const homeWidth=total?((data?.homeWins??0)/total)*100:0, drawWidth=total?((data?.draws??0)/total)*100:0, awayWidth=total?((data?.awayWins??0)/total)*100:0;
+  return <section className="h2h-history" aria-label={t("h2h.title")}>
+    <div className="preview-title-row"><div><span className="eyebrow">{t("h2h.historical")}</span><h4>{t("h2h.title")}</h4></div><div className="preview-tabs h2h-scope-tabs"><button className={scope==="all"?"active":""} onClick={()=>onScopeChange("all")}>{t("h2h.allMeetings")}</button><button className={scope==="venue"?"active":""} onClick={()=>onScopeChange("venue")}>{t("h2h.atHome",{team:abbreviate(homeName)})}</button></div></div>
+    {loading?<p className="preview-empty">{t("h2h.loading")}</p>:error?<p className="preview-empty">{error}</p>:!data||!data.totalMeetings?<p className="preview-empty">{t("h2h.empty")}</p>:<>
+      <div className="h2h-record-grid"><div><strong>{data.homeWins}</strong><span><i className="h2h-color-dot home" aria-hidden="true"/>{homeName}</span></div><div><strong>{data.draws}</strong><span><i className="h2h-color-dot draw" aria-hidden="true"/>{t("h2h.draws")}</span></div><div><strong>{data.awayWins}</strong><span><i className="h2h-color-dot away" aria-hidden="true"/>{awayName}</span></div></div>
+      <div className="h2h-record-bar"><span className="home" style={{width:`${homeWidth}%`}}/><span className="draw" style={{width:`${drawWidth}%`}}/><span className="away" style={{width:`${awayWidth}%`}}/></div>
+      <div className="h2h-metrics"><div><strong>{data.totalMeetings}</strong><span>{t("h2h.meetings")}</span></div><div><strong>{data.homeGoals} – {data.awayGoals}</strong><span>{t("h2h.goals")}</span></div><div><strong>{data.averageGoals.toFixed(2)}</strong><span>{t("h2h.averageGoals")}</span></div><div><strong>{Math.round(data.homeWinPercentage)}% – {Math.round(data.awayWinPercentage)}%</strong><span>{t("h2h.winPercentage")}</span></div></div>
+      <div className="h2h-results-heading"><h5>{t("h2h.previousMeetings")}</h5><span>{t("h2h.showing",{count:data.results.length,total:data.totalMeetings})}</span></div>
+      <div className="preview-results h2h-history-results">{data.results.map(match=>{const row=<div className="preview-result h2h-row" key={match.id}><span>{displayDate(match.date,locale)}</span><strong>{match.home}</strong><b>{match.homeGoals} {String.fromCharCode(8211)} {match.awayGoals}</b><strong>{match.away}</strong></div>;return match.reportId!==null?<a className="h2h-report-link" href={`/results/${match.reportId}`} key={match.id} title={t("h2h.openReport")}>{row}</a>:row;})}</div>
+      {data.pagination.hasMore||expanded?<button className="h2h-expand" onClick={onExpand}>{expanded?t("h2h.showFewer"):t("h2h.viewAll")}</button>:null}
+    </>}
+  </section>;
+}
+
 function PredictionPanel({prediction}:{prediction:MatchPrediction|null}) {
   const {t}=useI18n();
   if(!prediction || prediction.status!=="available") return <section className="prediction-empty" aria-label="Predictions">
@@ -173,11 +254,27 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
   const [averageScope,setAverageScope]=useState<"all"|"venue">("all");
   const [statsCategory,setStatsCategory]=useState<"attack"|"defense"|"passing">("attack");
   const [statsLens,setStatsLens]=useState<"for"|"against"|"team"|"opponent">("team");
+  const [h2hData,setH2hData]=useState<HistoricalH2HData|null>(null);
+  const [h2hLoading,setH2hLoading]=useState(false);
+  const [h2hError,setH2hError]=useState("");
+  const [h2hExpanded,setH2hExpanded]=useState(false);
+  const isFixture=!match.finished;
   useEffect(()=>{
     const d=dialog.current; d?.showModal();
     const prev=document.body.style.overflow; document.body.style.overflow="hidden";
     return ()=>{document.body.style.overflow=prev;};
   },[]);
+  useEffect(()=>{
+    if(!isFixture)return;
+    const controller=new AbortController();
+    setH2hLoading(true); setH2hError("");
+    fetch(`/api/matches/${match.id}/h2h?venue=${h2hScope==="venue"?"home":"all"}&limit=${h2hExpanded?1000:5}`,{signal:controller.signal,cache:"force-cache"})
+      .then(async response=>{const body=await response.json();if(!response.ok)throw new Error(body.error??t("h2h.unavailable"));return body as HistoricalH2HData;})
+      .then(body=>setH2hData(body))
+      .catch(reason=>{if(reason.name!=="AbortError")setH2hError(reason.message);})
+      .finally(()=>setH2hLoading(false));
+    return()=>controller.abort();
+  },[isFixture,match.id,h2hScope,h2hExpanded,t]);
   const home=statsForPeriod(data.stats.find(s=>s.gameId===match.id && s.teamId===match.homeId),period);
   const away=statsForPeriod(data.stats.find(s=>s.gameId===match.id && s.teamId===match.awayId),period);
   const rows=[
@@ -187,12 +284,9 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
     {label:"Pass attempts",h:home?.passes,a:away?.passes,pct:false},
     {label:"Pass completion",h:home?.passCompletion,a:away?.passCompletion,pct:true}
   ];
-  const isFixture=!match.finished;
   const archive=data.historicalMatches;
   const homeRecent=isFixture?recentMatches(archive,match.homeId,match.date):[];
   const awayRecent=isFixture?recentMatches(archive,match.awayId,match.date):[];
-  const allH2h=isFixture?archive.filter(m=>m.date<match.date&&((m.homeId===match.homeId&&m.awayId===match.awayId)||(m.homeId===match.awayId&&m.awayId===match.homeId))):[];
-  const h2h=(h2hScope==="venue"?allH2h.filter(m=>m.homeId===match.homeId):allH2h).slice(0,5);
   const statisticsOptions={lens:(statsLens==="team"?"for":statsLens==="opponent"?"against":statsLens),venue:(averageScope==="venue"?"home":"all") as VenueFilter,period,before:match.date};
   const homeAverage=aggregatePreviewStatistics(data.matches,data.stats,match.homeId,statisticsOptions);
   const awayAverage=aggregatePreviewStatistics(data.matches,data.stats,match.awayId,{...statisticsOptions,venue:averageScope==="venue"?"away":"all"});
@@ -232,7 +326,7 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
     {panel==="overview"&&isFixture&&<section className="fixture-preview" aria-label="Fixture preview">
       <div className="preview-heading"><span className="eyebrow">{t("ui.fixturePreview").toUpperCase()}</span><h3>{t("ui.recentFormContext")}</h3></div>
       <div className="form-preview-grid"><div><h4>{match.home}   ·   last 5</h4><PreviewResults matches={homeRecent} teamId={match.homeId}/></div><div><h4>{match.away}   ·   last 5</h4><PreviewResults matches={awayRecent} teamId={match.awayId}/></div></div>
-      <div className="h2h-preview"><div className="preview-title-row"><h4>{t("ui.headToHead")}   ·   {t("ui.lastFive")}</h4><div className="preview-tabs"><button className={h2hScope==="all"?"active":""} onClick={()=>setH2hScope("all")}>{t("ui.all")}</button><button className={h2hScope==="venue"?"active":""} onClick={()=>setH2hScope("venue")}>{t("ui.at")} {abbreviate(match.home)}</button></div></div>{h2h.length?<div className="preview-results">{h2h.map(m=><div className="preview-result h2h-row" key={m.id}><span>{displayDate(m.date)}</span><strong>{m.home}</strong><b>{m.homeGoals!==null&&m.awayGoals!==null?`${m.homeGoals} ${String.fromCharCode(8211)} ${m.awayGoals}`:`${String.fromCharCode(8212)}`}</b><strong>{m.away}</strong></div>)}</div>:<p className="preview-empty">{t("ui.noPriorMeeting")}</p>}</div>
+      <HistoricalHeadToHead data={h2hData} loading={h2hLoading} error={h2hError} expanded={h2hExpanded} onExpand={()=>setH2hExpanded(value=>!value)} homeName={homeDisplayName} awayName={awayDisplayName} scope={h2hScope} onScopeChange={scope=>{setH2hScope(scope);setH2hExpanded(false);}}/>
     </section>}
     {panel==="statistics"&&<section className="fixture-preview statistics-preview" aria-label={t("ui.seasonStatistics")}><div className="preview-title-row"><h3>{statsLens==="team"?t("ui.teamAverages"):t("ui.opponentAverages")}</h3><div className="preview-tabs"><button className={averageScope==="all"?"active":""} onClick={()=>setAverageScope("all")}>{t("ui.season")}</button><button className={averageScope==="venue"?"active":""} onClick={()=>setAverageScope("venue")}>{t("ui.venue")}</button></div></div><div className="stats-lens-row"><div className="stats-lens"><button className={statsLens==="team"?"active":""} onClick={()=>setStatsLens("team")}>{t("ui.team")}</button><button className={statsLens==="opponent"?"active":""} onClick={()=>setStatsLens("opponent")}>{t("ui.opponent")}</button></div><span className="stats-lens-note">{t("ui.forOutput")} · {t("ui.againstOutput")}</span></div><div className="stat-category-tabs"><button className={statsCategory==="attack"?"active":""} onClick={()=>setStatsCategory("attack")}>{t("ui.attackCategory")}</button><button className={statsCategory==="defense"?"active":""} onClick={()=>setStatsCategory("defense")}>{t("ui.defenseCategory")}</button><button className={statsCategory==="passing"?"active":""} onClick={()=>setStatsCategory("passing")}>{t("ui.passingCategory")}</button></div><div className="average-grid"><strong>{match.home}</strong><span>{t("ui.metric")}</span><strong>{match.away}</strong>{statisticsRows.map(row=><><b key={row.label+"-h"}>{typeof row.home==="number"?(row.label==="Matches played"?String(row.home):row.percent?percent(row.home*100):row.home.toFixed(1)):"?"}</b><span key={row.label}>{row.label}</span><b key={row.label+"-a"}>{typeof row.away==="number"?(row.label==="Matches played"?String(row.away):row.percent?percent(row.away*100):row.away.toFixed(1)):"?"}</b></>)}</div></section>}
     {panel==="predictions"&&<PredictionPanel prediction={null}/>} </>}
@@ -247,6 +341,7 @@ export default function Dashboard() {
   const seasonPartText=(value:SeasonPart)=>value==="first"?t("dash.firstHalf"):value==="second"?t("dash.secondHalf"):t("dash.fullSeason");
   const venueText=(value:VenueFilter)=>value==="home"?t("dash.home"):value==="away"?t("dash.away"):t("dash.allVenues");
   const [data,setData]=useState<Data|null>(null);
+  const dashboardCache=useRef(new Map<string,Data>());
   const [season,setSeason]=useState("");
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
@@ -275,11 +370,21 @@ export default function Dashboard() {
   const [overviewMetric,setOverviewMetric]=useState<LeagueTrendMetric>("goals");
   const [seasonPart,setSeasonPart]=useState<SeasonPart>("all");
   const [venue,setVenue]=useState<VenueFilter>("all");
+  const historyDataRequired=view==="history"||view==="teamAnalysis";
   useEffect(()=>{
     const controller=new AbortController();
-    setLoading(true);setError("");setSelected(null);setData(null);
+    setLoading(true);setError("");setSelected(null);
     const requestedSeason = seasonSelectable ? season : "";
-    fetch("/api/dashboard"+(requestedSeason?"?season="+encodeURIComponent(requestedSeason):""),{signal:controller.signal,cache:"no-store"})
+    const cacheKey=`${requestedSeason||"latest"}:${historyDataRequired?"history-v3":"compact"}:${revision}`;
+    const cached=dashboardCache.current.get(cacheKey);
+    if(cached){
+      setData(cached); setLoading(false);
+      return ()=>controller.abort();
+    }
+    const params=new URLSearchParams();
+    if(requestedSeason)params.set("season",requestedSeason);
+    if(historyDataRequired){params.set("includeHistory","1");params.set("historyVersion","3");}
+    fetch("/api/dashboard"+(params.size?`?${params.toString()}`:""),{signal:controller.signal,cache:"force-cache"})
       .then(async response=>{
         const body=await response.json();
         if(!response.ok)throw new Error(body.error??"Unable to load the dashboard.");
@@ -287,6 +392,7 @@ export default function Dashboard() {
       }).then(body=>{
         const changed=loadedSeason.current!==body.season;
         loadedSeason.current=body.season;
+        dashboardCache.current.set(cacheKey,body);
         setData(body);
         if(changed){
           const mode:FixtureMode=view==="upcoming"?"upcoming":"results";
@@ -296,7 +402,7 @@ export default function Dashboard() {
       .catch(err=>{if(err.name!=="AbortError")setError(err.message);})
       .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     return ()=>controller.abort();
-  },[season,seasonSelectable,revision,view]);
+  },[season,seasonSelectable,historyDataRequired,revision]);
 
 
   const effectiveMode:FixtureMode=view==="upcoming"?"upcoming":"results";
@@ -396,6 +502,18 @@ export default function Dashboard() {
   },[overviewResults]);
     const overviewTable=useMemo(()=>standings(overviewCompleted,"all",data?.matches??[],pointsForWin,standingsTiebreakers,pointsForDraw,selectedSeasonConfig),[overviewCompleted,data,pointsForWin,pointsForDraw,standingsTiebreakers,selectedSeasonConfig]);
   const overviewTrend=useMemo(()=>leagueTrend(data?.matches??[],data?.stats??[],overviewMetric),[data,overviewMetric]);
+  const overviewTrendWithExtremes=useMemo<TrendPointWithExtremes[]>(()=>{
+    const statsByGameTeam=new Map((data?.stats??[]).map(row=>[`${row.gameId}:${row.teamId}`,row]));
+    const grouped=new Map<number,TrendExtreme[]>();
+    const matchValue=(match:Match):number|null=>{
+      if(overviewMetric==="goals")return (match.homeGoals??0)+(match.awayGoals??0);
+      const home=statsByGameTeam.get(`${match.id}:${match.homeId}`)?.periods?.ft,away=statsByGameTeam.get(`${match.id}:${match.awayId}`)?.periods?.ft;
+      const values=overviewMetric==="shots"?[home?.shots,away?.shots]:overviewMetric==="shotsOnTarget"?[home?.onTarget,away?.onTarget]:overviewMetric==="corners"?[home?.corners,away?.corners]:overviewMetric==="yellowCards"?[home?.yellowCards,away?.yellowCards]:[home?.foulsCommitted,away?.foulsCommitted];
+      return values.every(value=>typeof value==="number")?(values as number[]).reduce((sum,value)=>sum+value,0):null;
+    };
+    for(const match of overviewCompleted){const value=matchValue(match);if(value===null)continue;const list=grouped.get(match.week)??[];list.push({match,matches:[match],value,ties:1});grouped.set(match.week,list);}
+    return overviewTrend.map(point=>{const list=[...(grouped.get(point.week)??[])].sort((a,b)=>a.value-b.value||a.match.date.localeCompare(b.match.date)||a.match.id-b.match.id);if(!list.length)return {...point,highest:null,lowest:null};const lowestValue=list[0].value,highestValue=list[list.length-1].value;const lowestMatches=list.filter(item=>item.value===lowestValue).map(item=>item.match),highestMatches=list.filter(item=>item.value===highestValue).map(item=>item.match);return {...point,lowest:{value:lowestValue,matches:lowestMatches,match:lowestMatches[0],ties:lowestMatches.length},highest:{value:highestValue,matches:highestMatches,match:highestMatches[0],ties:highestMatches.length}};});
+  },[data,overviewCompleted,overviewMetric,overviewTrend]);
   const overviewTrendSummary=useMemo(()=>{
     const rows=new Map((data?.stats??[]).map(row=>[`${row.gameId}:${row.teamId}`,row]));
     let numerator=0,denominator=0,eligible=0;
@@ -510,7 +628,7 @@ export default function Dashboard() {
       <div className="overview-summary-cards overview-summary-cards-main" aria-label="Latest matchday summary">
         <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.totalGoals")}</span><strong className="overview-kpi-value">{overviewResults.length?overviewSummary.goals:"-"}</strong><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
         <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.averageAttendance")}</span><strong className="overview-kpi-value">{overviewSummary.attendanceAverage===null?"-":Math.round(overviewSummary.attendanceAverage).toLocaleString("en-GB")}</strong><small className="overview-kpi-description">{overviewSummary.attendanceReported?t("dash.attendanceCoverage",{reported:overviewSummary.attendanceReported,total:overviewResults.length}):t("dash.attendanceUnavailable")}</small></div>
-        <div className="overview-summary-card overview-kpi-card home-results-card"><span className="overview-kpi-label">{t("dash.homeResults")}</span><strong className="overview-kpi-value"><b>{t("dash.wins")} {overviewSummary.homeResults.won}</b><b>{t("dash.draws")} {overviewSummary.homeResults.drawn}</b><b>{t("dash.losses")} {overviewSummary.homeResults.lost}</b></strong><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
+        <div className="overview-summary-card overview-kpi-card home-results-card"><span className="overview-kpi-label">{t("dash.homeResults")}</span><div className="overview-kpi-value home-results-line"><b><i>{overviewSummary.homeResults.won}</i>W</b><span>–</span><b><i>{overviewSummary.homeResults.drawn}</i>D</b><span>–</span><b><i>{overviewSummary.homeResults.lost}</i>L</b></div><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
       </div>      <div className="overview-top-grid">
         <section className="panel overview-results">
           <div className="panel-heading"><div><span className="eyebrow">{t("dash.latestResults")}</span><h2>{latestCompletedWeek?matchdayText(latestCompletedWeek):t("dash.noCompletedMatchday")}</h2><p className="match-range">{matchdayDates(overviewResults,locale)}{overviewScheduled>0?t("dash.fixtureStillToPlay",{count:overviewScheduled}):""}</p></div><button className="text-button" onClick={()=>selectView("results")}>{t("dash.viewAllResults")} <ArrowRight size={13}/></button></div>
@@ -533,7 +651,7 @@ export default function Dashboard() {
         <div className="panel-heading"><div><span className="eyebrow">{t("dash.seasonTrends")}</span><h2>{selectedTrend.label}</h2><p className="match-range">{t("dash.leagueCompleted")}</p></div></div>
         <div className="trend-switch" aria-label="Season trend metric">{trendOptions.map(option=><button key={option.id} className={overviewMetric===option.id?"active":""} onClick={()=>setOverviewMetric(option.id)}>{option.label}</button>)}</div>
         <div className="trend-summary" aria-label={`${selectedTrend.label} summary`}><div><span>{t("dash.seasonAverage")}</span><strong>{overviewTrendSummary.average===null?"?":overviewTrendSummary.average.toFixed(selectedTrend.percent?1:2)+(selectedTrend.percent?"%":"")}</strong><small>{t("dash.eligibleCompleted")}</small></div><div><span>{t("dash.latestMatchdayLabel")}</span><strong>{overviewTrendSummary.latest===null?"?":overviewTrendSummary.latest.toFixed(selectedTrend.percent?1:2)+(selectedTrend.percent?"%":"")}</strong><small>{overviewTrend.length?matchdayText(overviewTrend.at(-1)!.week):"No completed matchday"}</small></div></div>
-        <LeagueTrendChart points={overviewTrend} label={selectedTrend.label} percentValue={selectedTrend.percent}/>
+        <LeagueTrendChartAllExtremes points={overviewTrendWithExtremes} label={selectedTrend.label} percentValue={selectedTrend.percent}/>
       </section>
     </div>;
   }

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Map as MapIcon, Trophy } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, ChevronRight, Map as MapIcon, Trophy, X } from "lucide-react";
 import { standings } from "@/lib/analytics";
 import { useI18n } from "@/lib/i18n";
 import type { Dashboard, Match } from "@/lib/types";
@@ -105,14 +105,86 @@ const layoutSameCityClubs = (base: Club[]) => {
   });
 };
 
+type HistoricalPosition = NonNullable<Dashboard["historicalPositions"]>[number];
+
+function HistoricalPositionEvolution({data,primaryId,primaryName,primaryLogo,compareId,onCompareChange}:{data:Dashboard;primaryId:number;primaryName:string;primaryLogo?:string;compareId:number|null;onCompareChange:(id:number|null)=>void}) {
+  const {t}=useI18n();
+  const positions=data.historicalPositions??[];
+  const seasons=[...data.seasons].sort((a,b)=>Number(a.slice(0,4))-Number(b.slice(0,4)));
+  const clubs=[...new Map(positions.map(row=>[row.clubId,{id:row.clubId,name:row.clubName,logo:data.logos[row.clubName]}])).values()].sort((a,b)=>a.name.localeCompare(b.name));
+  const maxPosition=Math.max(20,...positions.map(row=>row.participants));
+  const width=1000,height=365,left=48,right=18,top=24,bottom=54,chartWidth=width-left-right,chartHeight=height-top-bottom;
+  const x=(index:number)=>left+(seasons.length>1?index/(seasons.length-1):.5)*chartWidth;
+  const y=(position:number)=>top+((position-1)/Math.max(1,maxPosition-1))*chartHeight;
+  const rowsFor=(id:number) => seasons.map(season=>positions.find(row=>row.season===season&&row.clubId===id)??null);
+  const primaryRows=rowsFor(primaryId), compareRows=compareId===null?[]:rowsFor(compareId);
+  const [hoveredPoint,setHoveredPoint]=useState<{season:string;clubId:number}|null>(null);
+  const chartWrapRef=useRef<HTMLDivElement>(null);
+  const tooltipRef=useRef<HTMLDivElement>(null);
+  const [tooltipPosition,setTooltipPosition]=useState({left:0,top:0,ready:false});
+  const segments=(rows:Array<HistoricalPosition|null>)=>{const result:number[][]=[];let current:number[]=[];rows.forEach((row,index)=>{if(row){current.push(index);}else if(current.length){result.push(current);current=[];}});if(current.length)result.push(current);return result;};
+  const summary=(rows:Array<HistoricalPosition|null>)=>{const played=rows.filter((row):row is HistoricalPosition=>Boolean(row));return {seasons:played.length,titles:played.filter(row=>row.champion).length,best:played.length?Math.min(...played.map(row=>row.position)):null,average:played.length?played.reduce((sum,row)=>sum+row.position,0)/played.length:null};};
+  const primarySummary=summary(primaryRows), compareSummary=summary(compareRows);
+  if (data.historicalPositions === undefined || positions.length === 0) return <section className="history-position-evolution" aria-live="polite"><div className="history-position-heading"><div><h3>{t("dash.historicalLeaguePosition")}</h3><p>{t("dash.historicalLeaguePositionUnavailable")}</p></div></div></section>;
+  if (!primaryRows.some(Boolean)) return <section className="history-position-evolution" aria-live="polite"><div className="history-position-heading"><div><h3>{primaryName}</h3><p>{t("dash.historicalLeaguePositionUnavailable")}</p></div></div></section>;
+  const renderSeries=(rows:Array<HistoricalPosition|null>,color:string,key:string)=>segments(rows).map((segment,index)=><polyline key={`${key}-line-${index}`} points={segment.map(seasonIndex=>`${x(seasonIndex)},${y(rows[seasonIndex]!.position)}`).join(" ")} fill="none" stroke={color} strokeWidth={key==="primary"?3:2.2} strokeLinejoin="round" strokeLinecap="round"/>);
+  const hoveredIndex=hoveredPoint===null?-1:seasons.indexOf(hoveredPoint.season);
+  const hoveredEntries:Array<{name:string;logo?:string;row:HistoricalPosition|null;color:string}>=[];
+  if (hoveredIndex >= 0) {
+    if (hoveredPoint?.clubId === primaryId) hoveredEntries.push({name:primaryName,logo:primaryLogo,row:primaryRows[hoveredIndex],color:"primary"});
+    if (compareId !== null && hoveredPoint?.clubId === compareId) { const comparisonClub=clubs.find(club=>club.id===compareId); if (comparisonClub) hoveredEntries.push({name:comparisonClub.name,logo:comparisonClub.logo,row:compareRows[hoveredIndex],color:"comparison"}); }
+  }
+  useLayoutEffect(()=>{
+    const update=()=>{
+      const wrap=chartWrapRef.current,tooltipElement=tooltipRef.current;
+      if(!wrap||!tooltipElement||hoveredIndex<0||!hoveredPoint){setTooltipPosition(position=>({...position,ready:false}));return;}
+      const wrapRect=wrap.getBoundingClientRect(),svg=wrap.querySelector("svg"),svgRect=svg?.getBoundingClientRect();
+      if(!svgRect){return;}
+      const row=hoveredPoint.clubId===primaryId?primaryRows[hoveredIndex]:compareRows[hoveredIndex];
+      if(!row){return;}
+      const pointX=svgRect.left-wrapRect.left+(x(hoveredIndex)/width)*svgRect.width;
+      const pointY=svgRect.top-wrapRect.top+(y(row.position)/height)*svgRect.height;
+      const tooltipRect=tooltipElement.getBoundingClientRect(),gap=12,padding=8;
+      let left=pointX+gap;
+      if(left+tooltipRect.width>wrapRect.width-padding)left=pointX-tooltipRect.width-gap;
+      left=Math.max(padding,Math.min(left,wrapRect.width-tooltipRect.width-padding));
+      let top=pointY-tooltipRect.height/2;
+      top=Math.max(padding,Math.min(top,wrapRect.height-tooltipRect.height-padding));
+      setTooltipPosition({left,top,ready:true});
+    };
+    update();
+    window.addEventListener("resize",update);
+    window.addEventListener("scroll",update,true);
+    const observer=chartWrapRef.current&&typeof ResizeObserver!=="undefined"?new ResizeObserver(update):null;
+    if(observer&&chartWrapRef.current)observer.observe(chartWrapRef.current);
+    return()=>{window.removeEventListener("resize",update);window.removeEventListener("scroll",update,true);observer?.disconnect();};
+  },[compareId,height,hoveredIndex,hoveredPoint,primaryId,width]);
+  const renderTooltipRecord=(entry:{name:string;logo?:string;row:HistoricalPosition|null;color:string})=><div className={`history-position-tooltip-record ${entry.color}`} key={entry.name}><div className="history-position-tooltip-club">{entry.logo&&<img src={entry.logo} alt=""/>}<strong>{entry.name}</strong></div>{entry.row?<div className="history-position-tooltip-stats"><span>{t("dash.position")} <b>{entry.row.position}</b></span><span>{t("dash.points")} <b>{entry.row.points}</b></span><span>{t("dash.record")} <b>{entry.row.won}–{entry.row.drawn}–{entry.row.lost}</b></span><span>{t("dash.gf")} <b>{entry.row.goalsFor}</b></span><span>{t("dash.ga")} <b>{entry.row.goalsAgainst}</b></span></div>:<p>{t("dash.notInBundesliga")}</p>}</div>;
+  const tooltip=(row:HistoricalPosition|null,season:string,name:string)=>row?`${season} · ${name}: ${t("dash.position") } ${row.position} / ${row.participants}${row.champion?` · ${t("dash.champions")}`:""}`:`${season} · ${name}: ${t("dash.notInBundesliga")} (${t("dash.divisionUnverified")})`;
+  const renderPoints=(rows:Array<HistoricalPosition|null>,name:string,color:string,key:string,logo?:string)=>rows.map((row,index)=><g key={`${key}-point-${seasons[index]}`}><circle cx={x(index)} cy={row?y(row.position):y(maxPosition)} r={row?4:6} fill={row?color:"transparent"} stroke={row?"#fff":"transparent"} strokeWidth={row?1.5:0} tabIndex={0}><title>{tooltip(row,seasons[index],name)}</title></circle>{row?.champion&&<text x={x(index)} y={y(row.position)-8} textAnchor="middle" className="history-position-trophy" aria-label={t("dash.champions")}>★</text>}</g>);
+  const renderChartPoints=(rows:Array<HistoricalPosition|null>,color:string,key:string,clubId:number)=>rows.map((row,index)=>row?<g key={`${key}-point-${seasons[index]}`} onMouseEnter={()=>setHoveredPoint({season:seasons[index],clubId})} onMouseLeave={()=>setHoveredPoint(null)} onFocus={()=>setHoveredPoint({season:seasons[index],clubId})} onBlur={()=>setHoveredPoint(null)}><circle className="history-position-point-hit" cx={x(index)} cy={y(row.position)} r={10} fill="transparent" stroke="none" tabIndex={0} aria-label={`${seasons[index]} ${row.clubName}`}/><circle cx={x(index)} cy={y(row.position)} r={4} fill="#fff" stroke={color} strokeWidth={1.5}/>{row.champion&&<text x={x(index)} y={y(row.position)-8} textAnchor="middle" className="history-position-trophy" aria-label={t("dash.champions")}>★</text>}</g>:null);
+  return <section className="history-position-evolution" aria-label={t("dash.historicalLeaguePosition")}>
+    <div className="history-position-heading"><div><h3>{t("dash.historicalLeaguePosition")}</h3><p>{t("dash.historicalLeaguePositionSubtitle")}</p></div><label><span>{t("dash.compareWith")}</span><select value={compareId===null?"none":String(compareId)} onChange={event=>onCompareChange(event.target.value==="none"?null:Number(event.target.value))}><option value="none">{t("dash.none")}</option>{clubs.filter(club=>club.id!==primaryId).map(club=><option key={club.id} value={club.id}>{club.name}</option>)}</select></label></div>
+    <div className="history-position-legend"><span><i className="primary"/>{primaryLogo&&<img src={primaryLogo} alt=""/>}{primaryName}</span>{compareId!==null&&<span><i className="comparison"/>{compareSummary&&clubs.find(club=>club.id===compareId)?.logo&&<img src={clubs.find(club=>club.id===compareId)?.logo} alt=""/>}{clubs.find(club=>club.id===compareId)?.name}</span>}</div>
+    <div className="history-position-chart-wrap" ref={chartWrapRef}><div className="history-position-chart-scroll"><svg className="history-position-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label={t("dash.historicalLeaguePosition")} preserveAspectRatio="none"><g className="history-position-grid">{Array.from({length:maxPosition},(_,index)=>index+1).map(position=><g key={position}><line x1={left} x2={width-right} y1={y(position)} y2={y(position)}/>{(position===1||position%2===0||position===maxPosition)&&<text x={left-9} y={y(position)+3} textAnchor="end">{position}</text>}</g>)}</g><line className="history-position-axis" x1={left} x2={left} y1={top} y2={height-bottom}/>{seasons.map((season,index)=>{const show=index===0||index===seasons.length-1||index%Math.max(1,Math.ceil(seasons.length/10))===0;return show?<text className="history-position-season" key={season} x={x(index)} y={height-19} textAnchor="middle">{formatSeasonShort(season)}</text>:null})}{renderSeries(primaryRows,"#b64e69","primary")}{compareId!==null&&renderSeries(compareRows,"#6f8da8","comparison")}{renderChartPoints(primaryRows,"#b64e69","primary",primaryId)}{compareId!==null&&renderChartPoints(compareRows,"#6f8da8","comparison",compareId)}</svg></div><span className="history-position-y-label">{t("dash.position")}</span>{hoveredPoint&&<div ref={tooltipRef} className="history-position-tooltip" style={{left:tooltipPosition.left,top:tooltipPosition.top,visibility:tooltipPosition.ready?"visible":"hidden"}}><strong className="history-position-tooltip-season">{formatSeasonShort(hoveredPoint.season)}</strong>{hoveredEntries.map(renderTooltipRecord)}</div>}</div>
+    <div className={`history-position-summary ${compareId!==null?"with-comparison":""}`}>{[[primaryName,primarySummary,"primary"],[compareId!==null?clubs.find(club=>club.id===compareId)?.name:null,compareSummary,"comparison"]].filter((item):item is [string,{seasons:number;titles:number;best:number|null;average:number|null},string]=>Boolean(item[0])).map(([name,summaryValue,key])=><div key={key}><strong>{name}</strong><span>{t("dash.seasonsPlayed")}<b>{summaryValue.seasons}</b></span><span>{t("dash.championships")}<b>{summaryValue.titles}</b></span><span>{t("dash.bestFinish")}<b>{summaryValue.best??"—"}</b></span><span>{t("dash.averageFinish")}<b>{summaryValue.average===null?"—":Math.round(summaryValue.average)}</b></span></div>)}</div>
+    <p className="history-position-note">{t("dash.divisionUnverifiedNote")}</p>
+  </section>;
+}
+
 export default function BundesligaHistory({ data }: Props) {
   const { t } = useI18n();
-  const [geo, setGeo] = useState<GeoJson | null>(null); const [index, setIndex] = useState(0); const [individualIndex, setIndividualIndex] = useState(0); const [allSeasons, setAllSeasons] = useState(false); const [allFromIndex, setAllFromIndex] = useState(0); const [allToIndex, setAllToIndex] = useState(0); const [hoveredState, setHoveredState] = useState<string | null>(null); const [selectedState, setSelectedState] = useState<string | null>(null); const stateLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const [recordSort, setRecordSort] = useState<HistoricalSortKey>("points"); const [recordDescending, setRecordDescending] = useState(true); const [recordView, setRecordView] = useState<HistoricalRecordView>("overview"); const [recordQuery, setRecordQuery] = useState("");
+  const [geo, setGeo] = useState<GeoJson | null>(null); const [index, setIndex] = useState(0); const [individualIndex, setIndividualIndex] = useState(0); const [allSeasons, setAllSeasons] = useState(false); const [allFromIndex, setAllFromIndex] = useState(0); const [allToIndex, setAllToIndex] = useState(0); const [hoveredState, setHoveredState] = useState<string | null>(null); const [selectedState, setSelectedState] = useState<string | null>(null); const stateLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const positionDialog = useRef<HTMLDialogElement>(null); const [recordSort, setRecordSort] = useState<HistoricalSortKey>("points"); const [recordDescending, setRecordDescending] = useState(true); const [recordView, setRecordView] = useState<HistoricalRecordView>("overview"); const [recordQuery, setRecordQuery] = useState(""); const [selectedHistoryClub, setSelectedHistoryClub] = useState<number | null>(null); const [comparisonHistoryClub, setComparisonHistoryClub] = useState<number | null>(null);
   const seasons = useMemo(() => [...data.seasons].sort((a, b) => Number(a.slice(0, 4)) - Number(b.slice(0, 4))), [data.seasons]); const season = seasons[index] ?? data.season;
   useEffect(() => { fetch("/history-vg1000.json").then(r => r.json()).then(setGeo).catch(() => setGeo(null)); }, []);
   useEffect(() => { if (!seasons.length) return; const latest = seasons.length - 1; setIndex(latest); setIndividualIndex(latest); setAllFromIndex(0); setAllToIndex(latest); }, [seasons.length]);
+  useEffect(() => {
+    const dialog = positionDialog.current;
+    if (selectedHistoryClub !== null && dialog && !dialog.open) dialog.showModal();
+    if (selectedHistoryClub === null && dialog?.open) dialog.close();
+  }, [selectedHistoryClub]);
   const allSeasonNames = useMemo(() => seasons.filter((_, seasonIndex) => seasonIndex >= Math.min(allFromIndex, allToIndex) && seasonIndex <= Math.max(allFromIndex, allToIndex)), [allFromIndex, allToIndex, seasons]);
-  const allTimeLabel = allSeasonNames.length ? `${formatSeasonShort(allSeasonNames[0])}â€“${formatSeasonShort(allSeasonNames[allSeasonNames.length - 1])}` : t("dash.allTime");
+  const allTimeLabel = allSeasonNames.length ? `${formatSeasonShort(allSeasonNames[0])}–${formatSeasonShort(allSeasonNames[allSeasonNames.length - 1])}` : t("dash.allTime");
   const activeState = selectedState ?? hoveredState;
   const matches = useMemo(() => allSeasons ? data.historicalMatches.filter(match => allSeasonNames.includes(match.season ?? "") && finished(match)) : data.historicalMatches.filter(m => m.season === season && finished(m)), [allSeasonNames, allSeasons, data.historicalMatches, season]);
   const teamLocations = useMemo(() => new Map((data.teamLocations ?? []).map(location => [location.id, location])), [data.teamLocations]);
@@ -161,7 +233,7 @@ export default function BundesligaHistory({ data }: Props) {
   const historicalTeamStats = useMemo(() => { type Record = { id: number; name: string; seasons: number; firstSeason: string; lastSeason: string; played: number; won: number; drawn: number; lost: number; diff: number; goalsFor: number; goalsAgainst: number; runnersUp: number; europeanQualifications: number; currentStreak: number; points: number; top3: number; top5: number; top10: number; relegated: number; best: number; worst: number; titles: number; average: number | null; logo?: string }; const records = new Map<number, Record>(); const scopedSeasons = allSeasons ? allSeasonNames : seasons; const chronological = [...scopedSeasons].sort(); const seasonTables = new Map<string, Map<number, number>>(); const seasonComplete = new Map<string, boolean>(); for (const seasonName of chronological) { const rows = standings(data.historicalMatches.filter(m => m.season === seasonName && finished(m)), "all", [], pointsForSeason(seasonName), seasonConfigFor(seasonName)?.standingsTiebreakers, seasonConfigFor(seasonName)?.rules?.pointsForDraw ?? 1, seasonConfigFor(seasonName)); const positions = new Map(rows.map((row, position) => [row.id, position + 1])); const seasonQualifications = new Set((seasonConfigFor(seasonName)?.summary?.outcomes ?? []).filter(outcome => outcome.type === "qualification").flatMap(outcome => outcome.teamIds)); seasonTables.set(seasonName, positions); seasonComplete.set(seasonName, rows.length > 1 && data.historicalMatches.filter(m => m.season === seasonName && finished(m)).length >= rows.length * (rows.length - 1)); for (const row of rows) { const current = records.get(row.id) ?? { id: row.id, name: row.name, seasons: 0, firstSeason: "", lastSeason: "", played: 0, won: 0, drawn: 0, lost: 0, diff: 0, goalsFor: 0, goalsAgainst: 0, runnersUp: 0, europeanQualifications: 0, currentStreak: 0, points: 0, top3: 0, top5: 0, top10: 0, relegated: 0, best: Number.POSITIVE_INFINITY, worst: 0, titles: 0, average: null }; const position = positions.get(row.id) ?? 0; current.seasons += 1; if (!current.firstSeason) current.firstSeason = seasonName; current.lastSeason = seasonName; current.played += row.played; current.won += row.won; current.drawn += row.drawn; current.lost += row.lost; current.goalsFor += row.gf; current.goalsAgainst += row.ga; current.diff += row.gf - row.ga; current.runnersUp += position === 2 ? 1 : 0; current.europeanQualifications += seasonQualifications.has(row.id) ? 1 : 0; current.points += row.won * 3 + row.drawn; current.top3 += position > 0 && position <= 3 ? 1 : 0; current.top5 += position > 0 && position <= 5 ? 1 : 0; current.top10 += position > 0 && position <= 10 ? 1 : 0; current.best = Math.min(current.best, position); current.worst = Math.max(current.worst, position); records.set(row.id, current); } } for (const record of records.values()) { let streak = 0; for (let i = chronological.length - 1; i >= 0; i -= 1) { const seasonName = chronological[i]; const seasonRows = seasonTables.get(seasonName) ?? new Map(); if (!seasonRows.has(record.id)) break; const relegatedIds = new Set((seasonConfigFor(seasonName)?.summary?.outcomes ?? []).filter(outcome => outcome.type === "relegated").flatMap(outcome => outcome.teamIds)); if (relegatedIds.has(record.id)) break; streak += 1; } record.currentStreak = streak; } for (let i = 0; i < chronological.length - 1; i += 1) { const current = seasonTables.get(chronological[i]) ?? new Map(); const following = seasonTables.get(chronological[i + 1]) ?? new Map(); if (!seasonComplete.get(chronological[i]) || !seasonComplete.get(chronological[i + 1])) continue; for (const [id] of current) if (!following.has(id)) { const record = records.get(id); if (record) record.relegated += 1; } } const titleCounts = new Map(championshipRanking.map(entry => [entry.name, entry.titles])); return [...records.values()].map(record => ({ ...record, titles: titleCounts.get(record.name) ?? 0, average: record.played ? record.points / record.played : null, logo: data.logos[record.name] })).sort((a, b) => b.points - a.points || b.diff - a.diff || a.name.localeCompare(b.name)); }, [allSeasonNames, allSeasons, championshipRanking, data.historicalMatches, data.seasonConfigs, seasons]);
   const sortedHistoricalTeamStats = useMemo(() => [...historicalTeamStats].sort((a, b) => { const left = a[recordSort] ?? 0; const right = b[recordSort] ?? 0; const comparison = typeof left === "string" && typeof right === "string" ? left.localeCompare(right) : Number(left) - Number(right); return recordDescending ? -comparison : comparison; }).filter(row => row.name.toLocaleLowerCase().includes(recordQuery.toLocaleLowerCase())), [historicalTeamStats, recordDescending, recordSort, recordQuery]);
   const stateCounts = useMemo(() => new Map([...stateParticipation].map(([state, entries]) => [state, entries.length])), [stateParticipation]); const stateClubs = useMemo(() => new Map([...stateParticipation].map(([state, entries]) => [state, entries.map(entry => entry.name)])), [stateParticipation]);
-  const stateLegend = allSeasons ? [{ label: "0", className: "zero" }, { label: "1â€“2", className: "low" }, { label: "3â€“4", className: "medium" }, { label: "5â€“6", className: "high" }, { label: "7â€“9", className: "very-high" }, { label: "10+", className: "highest" }] : [{ label: "0", className: "zero" }, { label: "1â€“2", className: "low" }, { label: "3", className: "medium" }, { label: "4+", className: "highest" }];
+  const stateLegend = allSeasons ? [{ label: "0", className: "zero" }, { label: "1–2", className: "low" }, { label: "3–4", className: "medium" }, { label: "5–6", className: "high" }, { label: "7–9", className: "very-high" }, { label: "10+", className: "highest" }] : [{ label: "0", className: "zero" }, { label: "1–2", className: "low" }, { label: "3", className: "medium" }, { label: "4+", className: "highest" }];
   const move = (next: number) => { if (allSeasons) return; const nextIndex = Math.max(0, Math.min(seasons.length - 1, next)); setIndex(nextIndex); setIndividualIndex(nextIndex); };
   const toggleAllSeasons = (enabled: boolean) => { if (enabled) { setIndividualIndex(index); setAllSeasons(true); } else { setAllSeasons(false); setIndex(individualIndex); } };
   const toggleRecordSort = (key: HistoricalSortKey) => { if (recordSort === key) setRecordDescending(value => !value); else { setRecordSort(key); setRecordDescending(key !== "best" && key !== "firstSeason" && key !== "worst"); } };
@@ -314,9 +386,21 @@ export default function BundesligaHistory({ data }: Props) {
       </div>
       {recordView !== "european" && <div className={`history-alltime-table history-records-${recordView}`} role="region" aria-label={t("dash.historicalRecords")}>
         <div className="history-alltime-row history-alltime-head"><span title="Rank">#</span><span title={t("dash.clubs")}>Club</span>{activeRecordColumns.map(column => <button key={column.key} title={column.title} type="button" onClick={() => toggleRecordSort(column.key)}>{column.label}</button>)}</div>
-        {sortedHistoricalTeamStats.map((row, rowIndex) => <div className="history-alltime-row" key={row.id}><span className="history-record-rank">{rowIndex + 1}</span><strong><span className="history-record-club">{row.logo && <img src={row.logo} alt="" />}</span>{row.name}</strong>{activeRecordColumns.map(column => { const value = column.value(row); const className = column.key === "diff" ? row.diff > 0 ? "positive" : row.diff < 0 ? "negative" : "" : ""; return <span key={column.key} className={className}>{value ?? "—"}</span>; })}</div>)}
+        {sortedHistoricalTeamStats.map((row, rowIndex) => <div className={`history-alltime-row${selectedHistoryClub === row.id ? " selected" : ""}`} key={row.id} role="button" tabIndex={0} onClick={() => { setSelectedHistoryClub(row.id); setComparisonHistoryClub(null); }} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedHistoryClub(row.id); setComparisonHistoryClub(null); } }}><span className="history-record-rank">{rowIndex + 1}</span><strong><span className="history-record-club">{row.logo && <img src={row.logo} alt="" />}</span>{row.name}</strong>{activeRecordColumns.map(column => { const value = column.value(row); const className = column.key === "diff" ? row.diff > 0 ? "positive" : row.diff < 0 ? "negative" : "" : ""; return <span key={column.key} className={className}>{value ?? "—"}</span>; })}</div>)}
       </div>} {recordView === "european" && europeanQualificationMatrix}
     </section>}
+    {recordView === "overview" && selectedHistoryClub !== null && (() => { const selected = historicalTeamStats.find(row => row.id === selectedHistoryClub); return selected ? <dialog
+      ref={positionDialog}
+      className="history-position-dialog"
+      onCancel={event => { event.preventDefault(); setSelectedHistoryClub(null); setComparisonHistoryClub(null); }}
+      onClick={event => { if (event.target === event.currentTarget) { setSelectedHistoryClub(null); setComparisonHistoryClub(null); } }}
+    >
+      <div className="history-position-dialog-top">
+        <span className="eyebrow">{t("dash.historicalLeaguePosition")}</span>
+        <button type="button" className="icon-button" onClick={() => { setSelectedHistoryClub(null); setComparisonHistoryClub(null); }} aria-label={t("ui.close")}><X size={19}/></button>
+      </div>
+      <HistoricalPositionEvolution data={data} primaryId={selected.id} primaryName={selected.name} primaryLogo={selected.logo} compareId={comparisonHistoryClub} onCompareChange={setComparisonHistoryClub}/>
+    </dialog> : null; })()}
     <footer className="history-source">{`${t("dash.boundarySource")}, EPSG:25832, downloaded from the official BKG WFS. ${t("dash.clubLocationsPending")}${unresolved.length ? ` \u2014 unresolved: ${unresolved.map(entry => entry.name).join(", ")}` : ""}.`}</footer>
   </main>;
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { database } from "@/lib/mongo";
 import { standings } from "@/lib/analytics";
 import { PERIODS } from "@/lib/filters";
+import { buildHistoricalPositions } from "@/lib/historical-positions";
 import type { Match, MatchStats, MatchPeriod, MatchStatus, PeriodStats, SeasonConfig, SeasonOutcomeClassification } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +19,9 @@ const matchStatus = (value: unknown): MatchStatus => {
 };
 
 export async function GET(request: Request) {
-  const requested = new URL(request.url).searchParams.get("season");
+  const params = new URL(request.url).searchParams;
+  const requested = params.get("season");
+  const includeHistory = params.get("includeHistory") === "1";
   if (requested && !/^\d{4}-\d{4}$/.test(requested))
     return NextResponse.json({error:"Choose a valid season."},{status:400});
   try {
@@ -45,7 +48,7 @@ export async function GET(request: Request) {
         home_team_name:1,away_team_name:1,home_goals:1,away_goals:1,game_status:1,venue:1,attendance:1
       }}).limit(1000).toArray(),
       db.collection("game_schedule").find({...filter,game_status:"finished"},{projection:scheduleProjection}).sort({game_date:-1}).limit(10000).toArray(),
-      db.collection("historical_results").find({season:{$in:seasons}},{projection:{_id:1,season:1,week:1,game_date:1,home_team_id:1,away_team_id:1,home_team_name:1,away_team_name:1,home_team_goals:1,away_team_goals:1,home_team_goals_ft:1,away_team_goals_ft:1,cancelled:1}}).sort({game_date:-1}).limit(50000).toArray().catch(() => [] as any[]),
+      db.collection("historical_results").find({season:includeHistory?{$in:seasons}:season},{projection:{_id:1,season:1,week:1,game_date:1,home_team_id:1,away_team_id:1,home_team_name:1,away_team_name:1,home_team_goals:1,away_team_goals:1,home_team_goals_ft:1,away_team_goals_ft:1,cancelled:1}}).sort({game_date:-1}).limit(includeHistory?50000:2000).toArray().catch(() => [] as any[]),
       db.collection("game_team_stats").find({...filter,season}, {projection:Object.fromEntries([
         ["_id",0],["game_id",1],["team_id",1],
         ...PERIODS.flatMap(p=>["goals","own_goals","shots","shot_on_target","shot_off_target","shot_blocked","shot_woodwork","shot_zone_inside_box","shot_zone_outside_box","shot_set_piece","shot_fastbreak","shot_open_play","shot_penalty","possession","touches","loss_of_possession","dispossessed","turnover","pass_attempt","pass_completed","pass_completion_pct","pass_key_pass","pass_assist","pass_through_ball","pass_forward","pass_backward","pass_cross","pass_cross_completed","pass_cross_completion_pct","pass_corner","pass_long","pass_long_completed","pass_long_completion_pct","pass_final_third","pass_final_third_completed","pass_final_third_completion_pct","tackles_attempted","tackle_gained_possession","tackle_success_pct","interceptions","clearances","blocks","blocked_shot","errors","ball_recoveries","dribbles","dribble_successful","offsides","foul_suffered","foul_committed","aerial_duels","aerial_duel_won","saves","goalkeeper_actions","claims","punches","keeper_pickup","keeper_sweeper","cards","yellow_card","second_yellow_card","red_card","shot_accuracy","goal_conversion_pct"].map(key=>["stats."+p.value+"."+key,1]))
@@ -189,11 +192,13 @@ export async function GET(request: Request) {
       const record_adjustments = adjustmentEntries(rawRecordAdjustments).flatMap((item: any) => { const teamId = adjustmentTeamId(item); if (!Number.isInteger(teamId)) return []; const type = String(item?.type ?? item?.action ?? item?.kind ?? "").trim(); if (!type) return []; return [{ teamId, type, ...(typeof item?.reason === "string" ? { reason: item.reason } : {}) }]; });
       const summaryOutcomes = classifications;
       return [{ season: row.season, competition: typeof row.competition === "string" ? row.competition : "Bundesliga", startYear: Number.isInteger(row.start_year) ? row.start_year : undefined, endYear: Number.isInteger(row.end_year) ? row.end_year : undefined, teamCount: Number.isInteger(row.team_count ?? row.teams) ? Number(row.team_count ?? row.teams) : undefined, matchdays: Number.isInteger(row.matchdays) ? Number(row.matchdays) : undefined, rules: { ...(Number.isFinite(pointsForWin) ? { pointsForWin } : {}), ...(Number.isFinite(pointsForDraw) ? { pointsForDraw } : {}) }, standingsTiebreakers, points_adjustments, record_adjustments, dataAvailability: row.data_availability ?? row.dataAvailability ?? row.data, summary: { verified: summary.verified === true, champion: championName, championTeamId: Number.isInteger(resolvedChampionId) ? resolvedChampionId : undefined, european_qualifications: qualifications, relegated: Array.isArray(summary.relegated) ? summary.relegated : undefined, outcomes: summaryOutcomes }, outcomes: summaryOutcomes }];
-    });    const selectedConfig = seasonConfigs.find(config => config.season === season);
+    });
+    const historicalPositions = includeHistory ? buildHistoricalPositions(seasons, historicalMatches, seasonConfigs) : [];
+    const selectedConfig = seasonConfigs.find(config => config.season === season);
     const selectedPointsForWin = selectedConfig?.rules?.pointsForWin ?? 3;
     const selectedPointsForDraw = selectedConfig?.rules?.pointsForDraw ?? 1;
-    return NextResponse.json({seasons,season,matches,teams:standings(matches, "all", [], selectedPointsForWin, selectedConfig?.standingsTiebreakers, selectedPointsForDraw, selectedConfig),stats,historicalMatches,logos,fullTeamNames,shortTeamNames,stadiums,teamLocations,seasonConfigs,goalscorers,fetchedAt:new Date().toISOString()},
-      {headers:{"Cache-Control":"no-store"}});
+    return NextResponse.json({seasons,season,matches,teams:standings(matches, "all", [], selectedPointsForWin, selectedConfig?.standingsTiebreakers, selectedPointsForDraw, selectedConfig),stats,historicalMatches,historicalPositions,logos,fullTeamNames,shortTeamNames,stadiums,teamLocations,seasonConfigs,goalscorers,fetchedAt:new Date().toISOString()},
+      {headers:{"Cache-Control":"private, max-age=60, stale-while-revalidate=300"}});
   } catch (error) {
     console.error("Dashboard data unavailable:", error instanceof Error ? error.name : "Unknown error");
     return NextResponse.json({error:"The Bundesliga database is unavailable. Start the bundesliga-mongo container and check the app's MongoDB settings."},{status:503});

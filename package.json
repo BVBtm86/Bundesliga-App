@@ -7,14 +7,15 @@
     "build": "next build",
     "start": "next start --hostname 127.0.0.1",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test lib/analytics.test.ts lib/filters.test.ts lib/team-analysis-value.test.ts",
+    "test": "tsx --test lib/analytics.test.ts lib/filters.test.ts lib/team-analysis-value.test.ts lib/historical-positions.test.ts",
     "test:e2e": "playwright test",
     "validate:i18n": "tsx scripts/validate-i18n.ts",
     "test:i18n": "tsx scripts/test-i18n-quality.ts",
     "test:event-explorer": "tsx scripts/test-event-explorer-state.ts",
     "audit:i18n": "tsx scripts/audit-i18n.ts",
     "ensure:match-report-indexes": "node scripts/ensure-match-report-indexes.mjs",
-    "ensure:season-config": "node scripts/ensure-season-config.mjs"
+    "ensure:season-config": "node scripts/ensure-season-config.mjs",
+    "ensure:h2h-indexes": "node scripts/ensure-h2h-indexes.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
