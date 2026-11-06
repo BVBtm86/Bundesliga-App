@@ -3,7 +3,7 @@ import "./globals.css";
 import { I18nProvider } from "@/lib/i18n";
 
 export const metadata: Metadata = {
-  title:"Bundesliga | Football Analytics",
+  title:"Bundesliga Intelligence | Football Analytics",
   icons:{icon:"/brand/bundesliga-mark.svg"},
   description:"Explore Bundesliga results, team performance and goal trends."
 };
