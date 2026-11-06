@@ -3,7 +3,7 @@ import { statsForPeriod } from "./filters";
 import type { Match, MatchPeriod, MatchStats, VenueFilter } from "./types";
 
 export type PreviewLens = "for" | "against";
-export type PreviewCategory = "attack" | "defense" | "passing";
+export type PreviewCategory = "attack" | "defense" | "passing" | "discipline";
 export type PreviewMetric = { label: string; percent?: boolean; home: number | null; away: number | null };
 
 type Totals = Record<string, number>;
@@ -40,9 +40,10 @@ export function aggregatePreviewStatistics(
     add(totals, "goals", sourceGoals); add(totals, "goalsConceded", opponentGoals);
     add(totals, "shots", source?.shots); add(totals, "onTarget", source?.onTarget);
     add(totals, "shotsConceded", opponent?.shots); add(totals, "onTargetConceded", opponent?.onTarget);
-    add(totals, "tackles", source?.tackles); add(totals, "successfulTackles", source?.successfulTackles); add(totals, "interceptions", source?.interceptions);
+    add(totals, "tackles", source?.tackles); add(totals, "successfulTackles", source?.successfulTackles); add(totals, "interceptions", source?.interceptions); add(totals, "clearances", source?.clearances); add(totals, "blockedShots", source?.blockedShots ?? source?.blockedShot); add(totals, "aerialDuels", source?.aerialDuels); add(totals, "aerialDuelsWon", source?.aerialDuelsWon);
     add(totals, "possession", source?.possession); add(totals, "passes", source?.passes); add(totals, "completedPasses", source?.completedPasses);
     add(totals, "keyPasses", source?.keyPasses); add(totals, "finalThirdPasses", source?.finalThirdPasses); add(totals, "completedFinalThirdPasses", source?.completedFinalThirdPasses);
+    add(totals, "fouls", source?.foulsCommitted); add(totals, "yellowCards", source?.yellowCards); add(totals, "redCards", source?.redCards);
   }
   return { sampleSize: eligible.length, totals };
 }
@@ -58,8 +59,11 @@ export function previewMetrics(home: Aggregated, away: Aggregated, category: Pre
     make("Shot accuracy", "onTarget/shots", true), make("Goal conversion", "goals/shots", true),
   ];
   if (category === "defense") return [
-    make("Goals conceded per match", "goalsConceded"), make("Shots conceded per match", "shotsConceded"), make("Shots on target conceded per match", "onTargetConceded"),
-    make("Successful tackles per match", "successfulTackles"), make("Interceptions per match", "interceptions"),
+    make("Successful tackles", "successfulTackles"), make("Interceptions", "interceptions"), make("Clearances", "clearances"),
+    make("Blocked shots", "blockedShots"), make("Aerial duels won (%)", "aerialDuelsWon/aerialDuels", true),
+  ];
+  if (category === "discipline") return [
+    make("Fouls per match", "fouls"), make("Yellow cards per match", "yellowCards"), make("Red cards per match", "redCards"),
   ];
   return [
     make("Possession", "possession", true), make("Pass completion", "completedPasses/passes", true), make("Successful passes per match", "completedPasses"),

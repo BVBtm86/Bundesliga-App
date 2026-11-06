@@ -17,11 +17,11 @@ export async function GET(_: Request, {params}:{params:Promise<{matchId:string}>
   const db=await database();
   const [source, assistRows, schedule]=await Promise.all([
     db.collection("game_key_events").find({game_id:matchId},{projection:{_id:1,game_date:1,event_id:1,team_id:1,player_id:1,player_name:1,minute:1,second:1,added_time:1,period:1,event_type:1,event_subtype:1,related_player_id:1,related_player_name:1,assist_player_id:1,assist_player_name:1}}).sort({minute:1,second:1,event_id:1}).toArray(),
-    db.collection("game_processed_events").find({game_id:matchId,competition_name:"Bundesliga",shot_is_goal:1,goal_assist:1},{projection:{_id:0,event_idx:1,related_player_id:1}}).toArray(),
+    db.collection("game_processed_events").find({game_id:matchId,shot_goal:1},{projection:{_id:0,event_idx:1,related_player_id:1}}).toArray(),
     db.collection("game_schedule").findOne({game_id:matchId,competition_name:"Bundesliga"},{projection:{_id:0,home_team_id:1,away_team_id:1,home_team_name:1,away_team_name:1}})
   ]);
   const assistIds=assistRows.map(row=>row.related_player_id).filter((id):id is number=>typeof id==="number");
-  const assistNames=assistIds.length?await db.collection("game_processed_events").find({game_id:matchId,competition_name:"Bundesliga",player_id:{$in:assistIds}},{projection:{_id:0,player_id:1,player:1}}).toArray():[];
+  const assistNames=assistIds.length?await db.collection("game_processed_events").find({game_id:matchId,player_id:{$in:assistIds}},{projection:{_id:0,player_id:1,player:1}}).toArray():[];
   const playerNames=new Map<number,string>();for(const row of assistNames){if(typeof row.player_id==="number"&&typeof row.player==="string")playerNames.set(row.player_id,row.player);}
   const assistByEvent=new Map<number,string>();for(const row of assistRows){if(typeof row.event_idx==="number"&&typeof row.related_player_id==="number"){const name=playerNames.get(row.related_player_id);if(name)assistByEvent.set(row.event_idx,name);}}
   const events:TimelineEvent[]=[];

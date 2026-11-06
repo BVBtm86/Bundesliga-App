@@ -1,10 +1,10 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, ArrowRight, BarChart3, CalendarClock, CalendarDays, ListChecks,
-  ChevronDown, ChevronLeft, ChevronRight, Database, Goal, LayoutDashboard, Map as MapIcon,
-  LoaderCircle, MapPin, RefreshCw, Search, Shield, Trophy, UserRound, Users, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Activity, ArrowLeftRight, ArrowRight, BarChart3, CalendarClock, CalendarDays, ChartNoAxesColumn, ChartNoAxesCombined, ClipboardList, LayoutDashboard, ListChecks,
+  ChevronDown, ChevronLeft, ChevronRight, Database, Goal, Map as MapIcon,
+  LoaderCircle, MapPin, Minus, RefreshCw, Search, Shield, Sparkles, Target, TrendingDown, TrendingUp, Trophy, UserRound, Users, X } from "lucide-react";
 import { useI18n, type Locale } from "@/lib/i18n";
 import SettingsMenu from "./settings-menu";
 import { completed, goalSummary, goalTrend, leagueTrend, standings } from "@/lib/analytics";
@@ -18,6 +18,7 @@ import { ComparisonBars } from "./comparison-bars";
 import MatchMomentum from "./match-momentum";
 import TeamAnalysis from "./team-analysis";
 import BundesligaHistory from "./bundesliga-history";
+import InsightsPlaceholder from "./insights-placeholder";
 
 type View = "overview" | "upcoming" | "results" | "standings" | "teams" | "teamAnalysis" | "players" | "predictions" | "goals" | "history";
 const allNavigation = [
@@ -34,6 +35,24 @@ const shortSeason = (s:string) => {const [start,end]=s.split("-");return end?`${
 const displayDate = (s:string,locale:Locale="en") => s ? new Intl.DateTimeFormat(({en:"en-GB",de:"de-DE",es:"es-ES",ro:"ro-RO"} as const)[locale],{day:"numeric",month:"short",year:"numeric",timeZone:"Europe/Berlin"}).format(new Date(s)) : "Date unavailable";
 const percent = (value:number) => Math.round(value)+"%";
 const abbreviate = (name:string) => name.replace("Borussia ","").replace("Eintracht ","").replace("Bayer 04 ","").replace("Bayer ","").replace("VfB ","").replace("FC ","");
+const normalizedTeamLabel = (name:string) => name.toLowerCase().replace(/[^a-z0-9]/g,"");
+type StandingsZone = {className:"champions"|"champions-league"|"europa-league"|"conference-league"|"relegation-playoff"|"relegated";label:string};
+function configuredStandingsZone(outcomes:Array<{type:string;competitionId?:string;label?:string;teamIds:number[]}>,teamId:number,labels:{champions:string;championsLeague:string;europaLeague:string;conferenceLeague:string;relegationPlayoff:string;relegated:string}):StandingsZone|null {
+  const candidates=outcomes.filter(outcome=>outcome.teamIds.includes(teamId));
+  const classify=(outcome:typeof candidates[number]):StandingsZone|null=>{
+    const type=outcome.type.toLowerCase().replace(/[^a-z]/g,"");
+    const token=`${outcome.competitionId??""} ${outcome.label??""}`.toLowerCase().replace(/[^a-z]/g,"");
+    if(type==="champion"||type==="champions")return {className:"champions",label:labels.champions};
+    if(type==="relegated"||type==="directrelegation")return {className:"relegated",label:labels.relegated};
+    if(type==="relegationplayoff"||type==="playoff")return {className:"relegation-playoff",label:labels.relegationPlayoff};
+    if(token.includes("championsleague")||token.includes("ucl"))return {className:"champions-league",label:outcome.label??labels.championsLeague};
+    if(token.includes("conferenceleague")||token.includes("uecl"))return {className:"conference-league",label:outcome.label??labels.conferenceLeague};
+    if(token.includes("europaleague")||token.includes("uel")||token.includes("uefacup"))return {className:"europa-league",label:outcome.label??labels.europaLeague};
+    return null;
+  };
+  const zones=candidates.map(classify).filter((zone):zone is StandingsZone=>Boolean(zone));
+  return zones.find(zone=>zone.className==="champions")??zones.find(zone=>zone.className==="champions-league")??zones.find(zone=>zone.className==="europa-league")??zones.find(zone=>zone.className==="conference-league")??zones.find(zone=>zone.className==="relegation-playoff")??zones.find(zone=>zone.className==="relegated")??null;
+}
 function OverviewScorers({goals,teamId}:{goals:Array<{teamId:number;playerName:string|null;minute:number|null;addedTime:number;subtype:string|null}>;teamId:number}) {
   const scorers=goals.filter(goal=>goal.teamId===teamId).sort((a,b)=>(a.minute??999)-(b.minute??999));
   const name=(value:string|null)=>{if(!value)return "Unknown scorer";const parts=value.trim().split(/\s+/);return parts.length>1?`${parts[0][0]}. ${parts.slice(1).join(" ")}`:value;};
@@ -64,6 +83,35 @@ function Form({values}:{values:string[]}) {
   const title=(value:string)=>value==="W"?t("standings.win"):value==="D"?t("standings.draw"):t("standings.loss");
   const short=(value:string)=>value==="W"?t("standings.winShort"):value==="D"?t("standings.drawShort"):t("standings.lossShort");
   return <span className="form" aria-label={t("standings.form")}>{values.map((v,i)=><span key={i} className={v.toLowerCase()} title={title(v)}>{short(v)}</span>)}</span>;
+}
+
+function StandingsForm({matches,teamId,venue="all",locale="en"}:{matches:Match[];teamId:number;venue?:VenueFilter;locale?:Locale}) {
+  const {t}=useI18n();
+  const eligible=completed(matches)
+    .filter(match=>(match.homeId===teamId||match.awayId===teamId) && (venue==="all" || (venue==="home" ? match.homeId===teamId : match.awayId===teamId)))
+    .sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id)
+    .slice(-5);
+  const latest=eligible.reduce<Match|null>((current,match)=>!current||match.date.localeCompare(current.date)>0||(match.date===current.date&&match.id>current.id)?match:current,null);
+  const resultText=(match:Match)=>{
+    const home=match.homeId===teamId;
+    const goalsFor=home?match.homeGoals!:match.awayGoals!;
+    const goalsAgainst=home?match.awayGoals!:match.homeGoals!;
+    return goalsFor>goalsAgainst?"W":goalsFor===goalsAgainst?"D":"L";
+  };
+  const resultLabel=(result:string)=>result==="W"?t("standings.win"):result==="D"?t("standings.draw"):t("standings.loss");
+  return <span className="form standings-form" aria-label={t("standings.form")}>
+    {eligible.map(match=>{
+      const home=match.homeId===teamId;
+      const opponent=home?match.away:match.home;
+      const result=resultText(match);
+      const score=`${match.homeGoals}–${match.awayGoals}`;
+      const description=`${opponent} · ${displayDate(match.date,locale)} · ${home?"H":"A"} · ${score} · ${resultLabel(result)}`;
+      const badge=<span className={`${result.toLowerCase()}${latest?.id===match.id?" latest": ""}`} title={description} aria-label={description}>{result}</span>;
+      return match.historical
+        ? <span key={match.id} className={`standings-form-item ${result.toLowerCase()}${latest?.id===match.id?" latest": ""}`}>{badge}</span>
+        : <a key={match.id} className={`standings-form-item ${result.toLowerCase()}${latest?.id===match.id?" latest": ""}`} href={`/results/${match.id}`} aria-label={description} onClick={event=>event.stopPropagation()}>{badge}</a>;
+    })}
+  </span>;
 }
 
 function DevelopmentPage({title}:{title:string}) {
@@ -117,6 +165,36 @@ function matchdayDates(matches:Match[],locale:Locale="en") {
 type TrendExtreme = { matches: Match[]; value: number; match: Match; ties: number };
 type TrendPointWithExtremes = LeagueTrendPoint & { highest: TrendExtreme | null; lowest: TrendExtreme | null };
 
+function monotoneTrendPath(points:TrendPointWithExtremes[],x:(index:number)=>number,y:(value:number|null)=>number) {
+  const path:string[]=[];
+  let segment:{index:number;value:number}[]=[];
+  const flush=()=>{
+    if(!segment.length)return;
+    if(segment.length===1){path.push(`M ${x(segment[0].index)} ${y(segment[0].value)}`);segment=[];return;}
+    const slopes=segment.slice(0,-1).map((point,index)=>{
+      const next=segment[index+1];
+      return (y(next.value)-y(point.value))/(x(next.index)-x(point.index));
+    });
+    const tangents=segment.map((_,index)=>index===0?slopes[0]:index===segment.length-1?slopes[slopes.length-1]:(slopes[index-1]+slopes[index])/2);
+    for(let index=0;index<slopes.length;index++){
+      if(slopes[index]===0){tangents[index]=0;tangents[index+1]=0;continue;}
+      if(Math.sign(tangents[index])!==Math.sign(slopes[index]))tangents[index]=0;
+      if(Math.sign(tangents[index+1])!==Math.sign(slopes[index]))tangents[index+1]=0;
+      const limit=3*Math.abs(slopes[index]);
+      tangents[index]=Math.sign(tangents[index])*Math.min(Math.abs(tangents[index]),limit);
+      tangents[index+1]=Math.sign(tangents[index+1])*Math.min(Math.abs(tangents[index+1]),limit);
+    }
+    path.push(`M ${x(segment[0].index)} ${y(segment[0].value)}`);
+    for(let index=0;index<slopes.length;index++){
+      const current=segment[index],next=segment[index+1],dx=(x(next.index)-x(current.index))/3;
+      path.push(`C ${x(current.index)+dx} ${y(current.value)+tangents[index]*dx}, ${x(next.index)-dx} ${y(next.value)-tangents[index+1]*dx}, ${x(next.index)} ${y(next.value)}`);
+    }
+    segment=[];
+  };
+  points.forEach((point,index)=>{if(point.value===null){flush();return;}segment.push({index,value:point.value});if(index===points.length-1)flush();});
+  return path.join(" ");
+}
+
 function LeagueTrendChartBalanced({points,label,percentValue}:{points:TrendPointWithExtremes[];label:string;percentValue?:boolean}) {
   const {t}=useI18n();
   const [hoveredWeek,setHoveredWeek]=useState<number|null>(null);
@@ -131,7 +209,7 @@ function LeagueTrendChartBalanced({points,label,percentValue}:{points:TrendPoint
   const extreme=(title:string,item:TrendExtreme|null)=><div className="overview-trend-extreme"><span>{title}</span>{item?<><strong>{item.match.home} {item.match.homeGoals}–{item.match.awayGoals} {item.match.away}</strong><b>{formatValue(item.value)}{item.ties>1?` · ${item.ties} tied`:""}</b></>:<em>{t("dash.tooltipUnavailable")}</em>}</div>;
   return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
     {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50}/><text x="18" y={254-index*50}>{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
-    <polyline points={points.map((point,index)=>`${x(index)},${y(point.value)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
+    <path d={monotoneTrendPath(points,x,y)} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
     {points.map((point,index)=><g key={point.week}><circle cx={x(index)} cy={y(point.value)} r="3.5" fill="#fff" stroke="var(--accent)" strokeWidth="1.5"><title>{t("dash.matchdayLabel",{number:point.week})}: {point.value===null?t("dash.tooltipUnavailable"):point.value.toFixed(percentValue?1:2)+(percentValue?"%":"")} · {label} · {tooltipCount(point.played)}{point.scheduled?` · ${t("dash.tooltipStillToPlay",{count:point.scheduled})}`:""}</title></circle>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text x={x(index)} y="282" textAnchor="middle">{point.week}</text>}</g>)}
   </svg><div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
 }
@@ -150,7 +228,7 @@ function LeagueTrendChartWithExtremes({points,label,percentValue}:{points:TrendP
   const extreme=(title:string,item:TrendExtreme|null,distinct=true)=><div className="overview-trend-extreme"><span>{title}</span>{item?<><strong>{item.match.home} {item.match.homeGoals}–{item.match.awayGoals} {item.match.away}</strong><b>{formatMatchValue(item.value)}{item.ties>1?` · ${item.ties} tied`:!distinct?` · ${t("dash.noDistinctExtreme")}`:""}</b></>:<em>{t("dash.tooltipUnavailable")}</em>}</div>;
   return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
     {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50}/><text x="18" y={254-index*50}>{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
-    <polyline points={points.map((point,index)=>`${x(index)},${y(point.value)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
+    <path d={monotoneTrendPath(points,x,y)} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
     {points.map((point,index)=><g key={point.week}><circle cx={x(index)} cy={y(point.value)} r="3.5" fill="#fff" stroke="var(--accent)" strokeWidth="1.5"/><circle className="overview-trend-hit" cx={x(index)} cy={y(point.value)} r="10" fill="transparent" stroke="none" tabIndex={0} aria-label={t("dash.matchdayLabel",{number:point.week})} onMouseEnter={()=>setHoveredWeek(point.week)} onMouseLeave={()=>setHoveredWeek(null)} onFocus={()=>setHoveredWeek(point.week)} onBlur={()=>setHoveredWeek(null)}/>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text x={x(index)} y="282" textAnchor="middle">{point.week}</text>}</g>)}
   </svg>{hovered&&<div className={`overview-trend-tooltip ${side}`}><strong>{t("dash.matchdayLabel",{number:hovered.week})}</strong><span className="overview-trend-average">{label}: <b>{hovered.value===null?t("dash.tooltipUnavailable"):formatAverage(hovered.value)}</b></span>{hovered.highest?.match.id===hovered.lowest?.match.id?extreme(`${t("dash.highest")} / ${t("dash.lowest")}`,hovered.highest,false):<>{extreme(t("dash.highest"),hovered.highest)}{extreme(t("dash.lowest"),hovered.lowest)}</>}</div>}<div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
 }
@@ -166,13 +244,19 @@ function LeagueTrendChartAllExtremes({points,label,percentValue}:{points:TrendPo
   const formatMatchValue=(value:number)=>`${Number.isInteger(value)?value:value.toFixed(2)}${percentValue?"%":""}`;
   const hoveredIndex=hoveredWeek===null?-1:points.findIndex(point=>point.week===hoveredWeek),hovered=hoveredIndex>=0?points[hoveredIndex]:null;
   const side=hoveredIndex>=0&&hoveredIndex<points.length*.2?"left":hoveredIndex>=points.length*.8?"right":"center";
-  const section=(title:string,item:TrendExtreme|null)=><section className="overview-trend-extreme"><span>{title}{item?` · ${formatMatchValue(item.value)}`:""}</span>{item?<div className="overview-trend-matches">{item.matches.map(match=><div className="overview-trend-match" key={match.id}><span>{match.home}</span><b>{match.homeGoals}–{match.awayGoals}</b><span>{match.away}</span></div>)}</div>:<em>{t("dash.tooltipUnavailable")}</em>}</section>;
+  const previousValue=hoveredIndex>0?points[hoveredIndex-1].value:null;
+  const previousWeek=hoveredIndex>0?points[hoveredIndex-1].week:null;
+  const change=hovered?.value!==null&&hovered?.value!==undefined&&previousValue!==null&&previousValue!==undefined?hovered.value-previousValue:null;
+  const changeText=change===null?null:`${change>0?"+":""}${change.toFixed(percentValue?1:2)}${percentValue?"%":""}`;
+  const changeIcon=change===null?null:change>0?<TrendingUp width={16} height={16}/>:change<0?<TrendingDown width={16} height={16}/>:<Minus width={16} height={16}/>;
+  const changeDirection=change===null?"flat":change>0?"up":change<0?"down":"flat";
+  const section=(kind:"highest"|"lowest",title:string,item:TrendExtreme|null)=><section className={`overview-trend-extreme ${kind}`}><span>{title}{item?` · ${formatMatchValue(item.value)}`:""}</span>{item?<div className="overview-trend-matches">{item.matches.map(match=><div className="overview-trend-match" key={match.id}><span>{match.home}</span><b>{match.homeGoals}–{match.awayGoals}</b><span>{match.away}</span></div>)}</div>:<em>{t("dash.tooltipUnavailable")}</em>}</section>;
   const allTied=Boolean(hovered?.highest&&hovered.lowest&&hovered.highest.value===hovered.lowest.value);
   return <div className="trend-chart"><svg viewBox="0 0 1300 300" role="img" aria-label={`${label} ${String.fromCharCode(8211)} ${t("dash.matchday")}`}>
     {[0,1,2,3,4].map(index=><g key={index}><line x1="54" x2="1272" y1={250-index*50} y2={250-index*50}/><text fill="var(--muted)" x="18" y={254-index*50}>{(min+index*range/4).toFixed(percentValue?0:1)}{percentValue?"%":""}</text></g>)}
-    <polyline points={points.map((point,index)=>`${x(index)},${y(point.value)}`).join(" ")} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
+    <path d={monotoneTrendPath(points,x,y)} fill="none" stroke="var(--accent)" strokeWidth="1.5" strokeLinejoin="round"/>
     {points.map((point,index)=><g key={point.week}><circle cx={x(index)} cy={y(point.value)} r="3" fill="#fff" stroke="var(--accent)" strokeWidth="1.5"/><circle className="overview-trend-hit" cx={x(index)} cy={y(point.value)} r="10" fill="transparent" stroke="none" tabIndex={0} aria-label={t("dash.matchdayLabel",{number:point.week})} onMouseEnter={()=>setHoveredWeek(point.week)} onMouseLeave={()=>setHoveredWeek(null)} onFocus={()=>setHoveredWeek(point.week)} onBlur={()=>setHoveredWeek(null)}/>{(index%Math.max(1,Math.ceil(points.length/9))===0||index===points.length-1)&&<text fill="var(--muted)" x={x(index)} y="282" textAnchor="middle">{point.week}</text>}</g>)}
-  </svg>{hovered&&<div className={`overview-trend-tooltip ${side}`}><strong>{t("dash.matchdayLabel",{number:hovered.week})}</strong><span className="overview-trend-average">{label}: <b>{hovered.value===null?t("dash.tooltipUnavailable"):formatAverage(hovered.value)}</b></span>{allTied?section(t("dash.allTied"),hovered.highest):<>{section(t("dash.highest"),hovered.highest)}{section(t("dash.lowest"),hovered.lowest)}</>}</div>}<div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
+  </svg>{hovered&&<div className={`overview-trend-tooltip ${side}`}><strong>{t("dash.matchdayLabel",{number:hovered.week})}</strong><div className="overview-trend-header"><span className="overview-trend-average">{label}: <b>{hovered.value===null?t("dash.tooltipUnavailable"):formatAverage(hovered.value)}</b></span>{changeText!==null&&previousWeek!==null&&<span className={`overview-trend-change ${changeDirection}`}><span>{t("dash.vsMatchday",{number:previousWeek})}</span>{changeIcon}<b>{changeText}</b></span>}</div>{allTied?<section className="overview-trend-extreme highest"><span>{t("dash.allTied")}{hovered.highest?` · ${formatMatchValue(hovered.highest.value)}`:""}</span>{hovered.highest?<div className="overview-trend-matches">{hovered.highest.matches.map(match=><div className="overview-trend-match" key={match.id}><span>{match.home}</span><b>{match.homeGoals}–{match.awayGoals}</b><span>{match.away}</span></div>)}</div>:<em>{t("dash.tooltipUnavailable")}</em>}</section>:<>{section("highest",t("dash.highest"),hovered.highest)}{section("lowest",t("dash.lowest"),hovered.lowest)}</>}</div>}<div className="chart-caption"><span>{label}</span><span>{t("dash.matchday")}</span></div></div>;
 }
 
 function berlinDateKey(value:string) {
@@ -197,12 +281,39 @@ function recentMatches(matches:Match[], teamId:number, before:string) {
 function PreviewResults({matches,teamId}:{matches:Match[];teamId:number}) {
   const {t}=useI18n();
   if(!matches.length)return <p className="preview-empty">No prior results in the imported archive.</p>;
-  return <div className="preview-results">{matches.map(m=>{
+    return <div className="preview-results">{matches.map(m=>{
     const home=m.homeId===teamId, goalsFor=home?m.homeGoals!:m.awayGoals!, goalsAgainst=home?m.awayGoals!:m.homeGoals!;
     const result=goalsFor>goalsAgainst?"W":goalsFor===goalsAgainst?"D":"L";
     const resultLabel=result==="W"?t("standings.winShort"):result==="D"?t("standings.drawShort"):t("standings.lossShort");
-    return <div className="preview-result" key={m.id}><span className={"result-dot "+result.toLowerCase()}>{resultLabel}</span><span>{displayDate(m.date)}</span><strong>{home?m.away:m.home}</strong><b>{goalsFor} &ndash; {goalsAgainst}</b></div>;
+    const row=<div className="preview-result recent-form-result" key={m.id}><span className={"result-dot "+result.toLowerCase()}>{resultLabel}</span><span>{displayDate(m.date)}</span><strong>{home?m.away:m.home}</strong><small className="venue-side" title={home?"Home":"Away"}>{home?"H":"A"}</small><b>{goalsFor} &ndash; {goalsAgainst}</b></div>;
+    return m.historical?<Fragment key={m.id}>{row}</Fragment>:<a className="recent-form-link" href={`/results/${m.id}`} key={m.id} aria-label={`${m.home} ${goalsFor}–${goalsAgainst} ${m.away}`}>{row}</a>;
   })}</div>;
+}
+
+type PreviewReference = { max:number|null; homeRank:number|null; awayRank:number|null; total:number };
+function PreviewComparisonBars({rows,homeName,awayName,reference,context}:{rows:ReturnType<typeof previewMetrics>;homeName:string;awayName:string;reference:Map<string,PreviewReference>;context:string}) {
+  const format=(value:number|null,percentValue?:boolean)=>value===null?"?":percentValue?percent(value*100):value.toFixed(1);
+  return <div className="preview-comparison-bars">
+    <div className="preview-comparison-head"><strong>{homeName}</strong><span aria-hidden="true"/><strong>{awayName}</strong></div>
+    {rows.map(row=>{const homeValue=row.home,awayValue=row.away,ref=reference.get(row.label),max=ref?.max??Math.max(homeValue??0,awayValue??0);const compactLabel=row.label.replace(/ per match$/i,"");const rank=ref?.homeRank&&ref.awayRank?`League ranking: ${ref.homeRank}/${ref.total} home · ${ref.awayRank}/${ref.total} away`:"League ranking unavailable";return <div className="preview-comparison-row" key={row.label}>
+      <b>{format(homeValue,row.percent)}</b>
+      <div className="preview-comparison-center" title={rank}><span>{compactLabel}</span><div className="preview-comparison-track"><i className="home" style={{width:max&&homeValue!==null?`${homeValue/max*100}%`:"0%"}}/><i className="away" style={{width:max&&awayValue!==null?`${awayValue/max*100}%`:"0%"}}/></div></div>
+      <b>{format(awayValue,row.percent)}</b>
+    </div>;})}
+  </div>;
+}
+
+function StatisticsCategoryIcon({category}:{category:"attack"|"defense"|"passing"|"discipline"}) {
+  const Icon=category==="attack"?Target:category==="defense"?Shield:category==="passing"?ArrowLeftRight:ClipboardList;
+  return <Icon size={14} strokeWidth={1.8} aria-hidden="true"/>;
+}
+function StatisticsCategoryTabs({value,onChange}:{value:"attack"|"defense"|"passing"|"discipline";onChange:(value:"attack"|"defense"|"passing"|"discipline")=>void}) {
+  const {t}=useI18n();
+  return <div className="stat-category-tabs preview-category-tabs">{(["attack","defense","passing","discipline"] as const).map(category=><button key={category} className={value===category?"active":""} onClick={()=>onChange(category)}>{t(`ui.${category}Category`)}</button>)}</div>;
+}
+function StatisticsControls({lens,scope,onLensChange,onScopeChange}:{lens:"team"|"opponent";scope:"all"|"venue";onLensChange:(value:"team"|"opponent")=>void;onScopeChange:(value:"all"|"venue")=>void}) {
+  const {t}=useI18n();
+  return <><div className="preview-stat-controls"><div className="stats-lens"><button className={lens==="team"?"active":""} onClick={()=>onLensChange("team")}>{t("ui.team")}</button><button className={lens==="opponent"?"active":""} onClick={()=>onLensChange("opponent")}>{t("ui.opponent")}</button></div><div className="preview-tabs"><button className={scope==="all"?"active":""} onClick={()=>onScopeChange("all")}>{t("ui.season")}</button><button className={scope==="venue"?"active":""} onClick={()=>onScopeChange("venue")}>{t("ui.venue")}</button></div></div><div className="preview-stat-help"><span>{lens==="team"?t("ui.forHelp"):t("ui.againstHelp")}</span><span>{scope==="all"?t("ui.seasonHelp"):t("ui.venueHelp")}</span></div></>;
 }
 
 type HistoricalH2HResult = { id:number|string; reportId:number|null; season:string|null; date:string; homeId:number|null; awayId:number|null; home:string; away:string; homeGoals:number; awayGoals:number };
@@ -249,11 +360,11 @@ function CompletedMatchDetails({match,home,away,onAnalysis}:{match:Match;home:Re
 function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:MatchPeriod;onClose:()=>void}) {
   const {locale,t}=useI18n();
   const dialog=useRef<HTMLDialogElement>(null);
-  const [panel,setPanel]=useState<"overview"|"predictions"|"statistics">("overview");
+  const [panel,setPanel]=useState<"overview"|"predictions"|"statistics"|"intelligence">("overview");
   const [h2hScope,setH2hScope]=useState<"all"|"venue">("all");
   const [averageScope,setAverageScope]=useState<"all"|"venue">("all");
-  const [statsCategory,setStatsCategory]=useState<"attack"|"defense"|"passing">("attack");
-  const [statsLens,setStatsLens]=useState<"for"|"against"|"team"|"opponent">("team");
+  const [statsCategory,setStatsCategory]=useState<"attack"|"defense"|"passing"|"discipline">("attack");
+  const [statsLens,setStatsLens]=useState<"team"|"opponent">("team");
   const [h2hData,setH2hData]=useState<HistoricalH2HData|null>(null);
   const [h2hLoading,setH2hLoading]=useState(false);
   const [h2hError,setH2hError]=useState("");
@@ -278,19 +389,35 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
   const home=statsForPeriod(data.stats.find(s=>s.gameId===match.id && s.teamId===match.homeId),period);
   const away=statsForPeriod(data.stats.find(s=>s.gameId===match.id && s.teamId===match.awayId),period);
   const rows=[
-    {label:"Shots",h:home?.shots,a:away?.shots,pct:false},
-    {label:"On target",h:home?.onTarget,a:away?.onTarget,pct:false},
-    {label:"Possession",h:home?.possession,a:away?.possession,pct:true},
-    {label:"Pass attempts",h:home?.passes,a:away?.passes,pct:false},
-    {label:"Pass completion",h:home?.passCompletion,a:away?.passCompletion,pct:true}
+    {label:t("stats.metric.shots"),h:home?.shots,a:away?.shots,pct:false},
+    {label:t("stats.metric.shot_on_target"),h:home?.onTarget,a:away?.onTarget,pct:false},
+    {label:t("report.possession"),h:home?.possession,a:away?.possession,pct:true},
+    {label:t("stats.metric.pass_attempt"),h:home?.passes,a:away?.passes,pct:false},
+    {label:t("stats.metric.pass_completion_pct"),h:home?.passCompletion,a:away?.passCompletion,pct:true}
   ];
   const archive=data.historicalMatches;
   const homeRecent=isFixture?recentMatches(archive,match.homeId,match.date):[];
   const awayRecent=isFixture?recentMatches(archive,match.awayId,match.date):[];
-  const statisticsOptions={lens:(statsLens==="team"?"for":statsLens==="opponent"?"against":statsLens),venue:(averageScope==="venue"?"home":"all") as VenueFilter,period,before:match.date};
+  const statisticsOptions:{lens:"for"|"against";venue:VenueFilter;period:MatchPeriod;before:string}={lens:statsLens==="team"?"for":"against",venue:(averageScope==="venue"?"home":"all") as VenueFilter,period,before:match.date};
   const homeAverage=aggregatePreviewStatistics(data.matches,data.stats,match.homeId,statisticsOptions);
   const awayAverage=aggregatePreviewStatistics(data.matches,data.stats,match.awayId,{...statisticsOptions,venue:averageScope==="venue"?"away":"all"});
   const statisticsRows=previewMetrics(homeAverage,awayAverage,statsCategory);
+  const leagueReference=useMemo(()=>{
+    const roleVenue=(role:"home"|"away")=>averageScope==="venue"?role:"all" as VenueFilter;
+    const build=(role:"home"|"away")=>data.teams.map(team=>previewMetrics(
+      aggregatePreviewStatistics(data.matches,data.stats,team.id,{...statisticsOptions,venue:roleVenue(role)}),
+      aggregatePreviewStatistics(data.matches,data.stats,team.id,{...statisticsOptions,venue:roleVenue(role)}),statsCategory)
+    );
+    const homeLeague=build("home"),awayLeague=build("away"),reference=new Map<string,PreviewReference>();
+    statisticsRows.forEach(row=>{
+      const homeValues=homeLeague.map(rows=>rows.find(item=>item.label===row.label)?.home).filter((value):value is number=>typeof value==="number");
+      const awayValues=awayLeague.map(rows=>rows.find(item=>item.label===row.label)?.home).filter((value):value is number=>typeof value==="number");
+      const values=[...homeValues,...awayValues], max=values.length?Math.max(...values):null, lowerBetter=/conceded|fouls|card/i.test(row.label);
+      const rank=(value:number|null,group:number[])=>{if(value===null||!group.length)return null;const sorted=[...group].sort((a,b)=>lowerBetter?a-b:b-a);return sorted.findIndex(item=>item===value)+1;};
+      reference.set(row.label,{max,homeRank:rank(row.home,homeValues),awayRank:rank(row.away,awayValues),total:Math.max(homeValues.length,awayValues.length)});
+    });
+    return reference;
+  },[averageScope,data,period,match.date,statisticsOptions,statsCategory,statisticsRows]);
   const homeDisplayName=data.fullTeamNames?.[match.home] ?? match.home;
   const awayDisplayName=data.fullTeamNames?.[match.away] ?? match.away;
   return <dialog ref={dialog} className="match-dialog" onCancel={onClose}
@@ -301,7 +428,7 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
     {match.finished&&<p className="match-kickoff">{t("ui.kickoff")} {kickoffTime(match.date)}</p>}
     <div className="scoreboard">
       <div><Badge name={match.home} logos={data.logos} large/><h3>{homeDisplayName}</h3><OverviewScorers goals={data.goalscorers[String(match.id)]??[]} teamId={match.homeId}/></div>
-      <div className="score"><strong>{match.finished?<>{match.homeGoals ?? "?"} <span>:</span> {match.awayGoals ?? "?"}</>:"vs"}</strong>{match.finished&&<small className="modal-xg">xG&nbsp; &mdash; : &mdash;</small>}{match.finished?<span className="pill">{period==="ft"?t("ui.fullTime").toUpperCase():rawPeriodLabel(period).toUpperCase()}</span>:<span className="fixture-kickoff">{displayDate(match.date,locale)}<b>{kickoffTime(match.date)}</b></span>}</div>
+      <div className="score"><strong>{match.finished?<>{match.homeGoals ?? "?"} <span>:</span> {match.awayGoals ?? "?"}</>:"vs"}</strong>{match.finished?<span className="pill">{period==="ft"?t("ui.fullTime").toUpperCase():rawPeriodLabel(period).toUpperCase()}</span>:<span className="fixture-kickoff">{displayDate(match.date,locale)}<b>{kickoffTime(match.date)}</b></span>}</div>
       <div><Badge name={match.away} logos={data.logos} large/><h3>{awayDisplayName}</h3><OverviewScorers goals={data.goalscorers[String(match.id)]??[]} teamId={match.awayId}/></div>
     </div>
 
@@ -311,7 +438,7 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
       {match.attendance!==null&&<span className="venue-attendance"><Users size={13}/>{match.attendance.toLocaleString("en-GB")}</span>}
     </div>
     {match.finished?<CompletedMatchDetails match={match} home={home} away={away} onAnalysis={()=>window.location.assign(`/results/${match.id}`)}/>:<>
-    <nav className="dialog-tabs" aria-label={t("ui.fixturePreviewSections")}><button className={panel==="overview"?"active":""} onClick={()=>setPanel("overview")}>{t("nav.overview")}</button><button className={panel==="predictions"?"active":""} onClick={()=>setPanel("predictions")}>{t("ui.predictions")}</button><button className={panel==="statistics"?"active":""} onClick={()=>setPanel("statistics")}>{t("ui.statistics")}</button></nav>
+    <nav className="dialog-tabs" aria-label={t("ui.fixturePreviewSections")}><button className={panel==="overview"?"active":""} onClick={()=>setPanel("overview")}><LayoutDashboard size={14}/>{t("nav.overview")}</button><button className={panel==="predictions"?"active":""} onClick={()=>setPanel("predictions")}><ChartNoAxesCombined size={14}/>{t("ui.predictions")}</button><button className={panel==="statistics"?"active":""} onClick={()=>setPanel("statistics")}><ChartNoAxesColumn size={14}/>{t("ui.statistics")}</button><button className={panel==="intelligence"?"active":""} onClick={()=>setPanel("intelligence")}><Sparkles size={14}/>{t("ui.intelligence")}</button></nav>
     {panel==="statistics"&&match.finished&&<><h3 className="section-subtitle">{period==="ft"?t("ui.fullTimeComparison"):rawPeriodLabel(period)+" · "+t("ui.comparison")}</h3>
     {rows.map(row=>{
       const available=row.h!=null && row.a!=null;
@@ -328,8 +455,8 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
       <div className="form-preview-grid"><div><h4>{match.home}   ·   last 5</h4><PreviewResults matches={homeRecent} teamId={match.homeId}/></div><div><h4>{match.away}   ·   last 5</h4><PreviewResults matches={awayRecent} teamId={match.awayId}/></div></div>
       <HistoricalHeadToHead data={h2hData} loading={h2hLoading} error={h2hError} expanded={h2hExpanded} onExpand={()=>setH2hExpanded(value=>!value)} homeName={homeDisplayName} awayName={awayDisplayName} scope={h2hScope} onScopeChange={scope=>{setH2hScope(scope);setH2hExpanded(false);}}/>
     </section>}
-    {panel==="statistics"&&<section className="fixture-preview statistics-preview" aria-label={t("ui.seasonStatistics")}><div className="preview-title-row"><h3>{statsLens==="team"?t("ui.teamAverages"):t("ui.opponentAverages")}</h3><div className="preview-tabs"><button className={averageScope==="all"?"active":""} onClick={()=>setAverageScope("all")}>{t("ui.season")}</button><button className={averageScope==="venue"?"active":""} onClick={()=>setAverageScope("venue")}>{t("ui.venue")}</button></div></div><div className="stats-lens-row"><div className="stats-lens"><button className={statsLens==="team"?"active":""} onClick={()=>setStatsLens("team")}>{t("ui.team")}</button><button className={statsLens==="opponent"?"active":""} onClick={()=>setStatsLens("opponent")}>{t("ui.opponent")}</button></div><span className="stats-lens-note">{t("ui.forOutput")} · {t("ui.againstOutput")}</span></div><div className="stat-category-tabs"><button className={statsCategory==="attack"?"active":""} onClick={()=>setStatsCategory("attack")}>{t("ui.attackCategory")}</button><button className={statsCategory==="defense"?"active":""} onClick={()=>setStatsCategory("defense")}>{t("ui.defenseCategory")}</button><button className={statsCategory==="passing"?"active":""} onClick={()=>setStatsCategory("passing")}>{t("ui.passingCategory")}</button></div><div className="average-grid"><strong>{match.home}</strong><span>{t("ui.metric")}</span><strong>{match.away}</strong>{statisticsRows.map(row=><><b key={row.label+"-h"}>{typeof row.home==="number"?(row.label==="Matches played"?String(row.home):row.percent?percent(row.home*100):row.home.toFixed(1)):"?"}</b><span key={row.label}>{row.label}</span><b key={row.label+"-a"}>{typeof row.away==="number"?(row.label==="Matches played"?String(row.away):row.percent?percent(row.away*100):row.away.toFixed(1)):"?"}</b></>)}</div></section>}
-    {panel==="predictions"&&<PredictionPanel prediction={null}/>} </>}
+    {panel==="statistics"&&<section className="fixture-preview statistics-preview" aria-label={t("ui.seasonStatistics")}><div className="preview-title-row"><div><h3>{statsLens==="team"?t("ui.teamAverages"):t("ui.opponentAverages")}</h3>{averageScope==="venue"&&<small className="stats-venue-note">{homeDisplayName} at home · {awayDisplayName} away</small>}</div><div className="preview-tabs"><button className={averageScope==="all"?"active":""} onClick={()=>setAverageScope("all")}>{t("ui.season")}</button><button className={averageScope==="venue"?"active":""} onClick={()=>setAverageScope("venue")}>{t("ui.venue")}</button></div></div><div className="stats-lens-row"><div className="stats-lens"><button className={statsLens==="team"?"active":""} onClick={()=>setStatsLens("team")}>{t("ui.team")}</button><button className={statsLens==="opponent"?"active":""} onClick={()=>setStatsLens("opponent")}>{t("ui.opponent")}</button></div><span className="stats-lens-note">{t("ui.forOutput")} · {t("ui.againstOutput")}</span></div><div className="stat-category-tabs"><button className={statsCategory==="attack"?"active":""} onClick={()=>setStatsCategory("attack")}>{t("ui.attackCategory")}</button><button className={statsCategory==="defense"?"active":""} onClick={()=>setStatsCategory("defense")}>{t("ui.defenseCategory")}</button><button className={statsCategory==="passing"?"active":""} onClick={()=>setStatsCategory("passing")}>{t("ui.passingCategory")}</button><button className={statsCategory==="discipline"?"active":""} onClick={()=>setStatsCategory("discipline")}>{t("ui.disciplineCategory")}</button></div><div className="average-grid"><strong>{match.home}</strong><span>{t("ui.metric")}</span><strong>{match.away}</strong>{statisticsRows.map(row=><Fragment key={row.label}><b>{typeof row.home==="number"?(row.percent?percent(row.home*100):row.home.toFixed(1)):"?"}</b><span>{row.label}</span><b>{typeof row.away==="number"?(row.percent?percent(row.away*100):row.away.toFixed(1)):"?"}</b></Fragment>)}</div></section>}
+    {panel==="statistics"&&<><StatisticsControls lens={statsLens} scope={averageScope} onLensChange={setStatsLens} onScopeChange={setAverageScope}/><StatisticsCategoryTabs value={statsCategory} onChange={setStatsCategory}/><PreviewComparisonBars rows={statisticsRows} homeName={homeDisplayName} awayName={awayDisplayName} reference={leagueReference} context=""/></>} {panel==="predictions"&&<InsightsPlaceholder insightType="predictions" description="Future validated outputs: expected goals, outcome probabilities and scoreline probabilities."/>} {panel==="intelligence"&&(<InsightsPlaceholder insightType="match-preview" description="Future analysis of tactical strengths, weaknesses, playing styles and matchup-specific patterns."/>)}</>}
   </dialog>;
 }
 
@@ -547,7 +674,7 @@ export default function Dashboard() {
       group.push(match); groups.set(key,group); return groups;
     },new Map<string,Match[]>()).entries()).sort(([a],[b])=>a.localeCompare(b)).map(([key,matches])=>({key,matches:matches.sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime())})) : [{key:"",matches:visible}];
     const renderFixture=(m:Match,showRowMatchday=false)=>{const shortHome=data!.shortTeamNames?.[String(m.homeId)] ?? abbreviate(m.home); const shortAway=data!.shortTeamNames?.[String(m.awayId)] ?? abbreviate(m.away); const canPreview=!m.historical&&(m.finished||effectiveMode==="upcoming"); return <button key={m.id} disabled={!canPreview} className={"match-row grouped"+(isTeamHistory||!m.finished?" history-row":"")+(canPreview?"":" calendar-only")} onClick={canPreview?()=>m.finished?router.push(`/results/${m.id}`):setSelected(m):undefined}>
-      {(view==="results"||isTeamHistory||!m.finished)&&<span className="history-fixture-meta"><span>{displayDate(m.date)}</span><span>{kickoffTime(m.date)}</span>{showRowMatchday&&m.week>0&&<span className="fixture-matchday">MATCHDAY {m.week}</span>}</span>}
+      {(view==="results"||isTeamHistory||!m.finished)&&<span className="history-fixture-meta">{(view!=="results"||isTeamHistory)&&<span>{displayDate(m.date)}</span>}<span>{kickoffTime(m.date)}</span>{showRowMatchday&&m.week>0&&<span className="fixture-matchday">MATCHDAY {m.week}</span>}</span>}
       <span className="match-teams"><span className="home-team"><span><span className="desktop-team-name">{data!.fullTeamNames?.[m.home] ?? shortHome}</span><span className="mobile-team-name">{shortHome}</span></span><Badge name={m.home} logos={data!.logos}/></span>
         <strong className="match-score">{m.finished?<>{m.homeGoals??"\u2014"} <span>&ndash;</span> {m.awayGoals??"\u2014"}</>:"vs"}</strong>
         <span className="away-team"><Badge name={m.away} logos={data!.logos}/><span><span className="desktop-team-name">{data!.fullTeamNames?.[m.away] ?? shortAway}</span><span className="mobile-team-name">{shortAway}</span></span></span></span>
@@ -583,36 +710,27 @@ export default function Dashboard() {
     const unavailable=tableMatches.filter(m=>m.finished).length-completed(tableMatches).length;
     const zoneFor=(position:number, teamId:number)=>{
       if(!showZones)return null;
-      const outcomes=configuredOutcomes.filter(outcome=>outcome.teamIds.includes(teamId));
-      const explicit=outcomes.find(outcome=>outcome.type==="champion") ?? outcomes.find(outcome=>outcome.type==="qualification") ?? outcomes.find(outcome=>outcome.type==="relegation_playoff") ?? outcomes.find(outcome=>outcome.type==="relegated") ?? outcomes.find(outcome=>outcome.type==="promoted");
-      if(explicit){
-        if(explicit.type==="champion")return {label:t("dash.champions"),className:"champions"};
-        if(explicit.type==="relegated")return {label:t("dash.relegated"),className:"relegated"};
-        if(explicit.type==="relegation_playoff")return {label:t("dash.relegationPlayoff"),className:"relegation-playoff"};
-        if(explicit.type==="promoted")return {label:t("dash.promoted"),className:"promoted"};
-        const competition=explicit.competitionId??"";
-        if(competition.includes("champions"))return {label:explicit.label??t("dash.championsLeague"),className:"champions-league"};
-        if(competition.includes("conference"))return {label:explicit.label??t("dash.conferenceLeague"),className:"conference-league"};
-        return {label:explicit.label??t("dash.europaLeague"),className:"europa-league"};
-      }
-      if(hasVerifiedClassifications)return null;
+      const zone=configuredStandingsZone(configuredOutcomes,teamId,{champions:t("dash.champions"),championsLeague:t("dash.championsLeague"),europaLeague:t("dash.europaLeague"),conferenceLeague:t("dash.conferenceLeague"),relegationPlayoff:t("dash.relegationPlayoff"),relegated:t("dash.relegated")});
+      if(zone && !(position===16 && zone.className==="relegated" && !configuredOutcomes.some(outcome=>outcome.type.toLowerCase().replace(/[^a-z]/g,"")==="relegationplayoff")))return zone;
       if(position===1)return {label:t("dash.champions"),className:"champions"};
       if(position<=4)return {label:t("dash.championsLeague"),className:"champions-league"};
       if(position===5)return {label:t("dash.europaLeague"),className:"europa-league"};
       if(position===6)return {label:t("dash.conferenceLeague"),className:"conference-league"};
       if(position===16)return {label:t("dash.relegationPlayoff"),className:"relegation-playoff"};
       if(position>=17)return {label:t("dash.relegated"),className:"relegated"};
+      if(zone)return zone;
       return null;
     };
     return <section className={"panel league-panel"+(full?" expanded":"")}>
       <div className="panel-heading"><div><h2>{period==="ft"?t("dash.seasonStandings"):t("dash.standingsForPeriod",{period:periodText(period)})}</h2>
         <p className="match-range">{displaySeason(data!.season)}   ·   {seasonPartText(seasonPart)}   ·   {venueText(venue)}{view==="standings"?"   ·   MD "+standingsFrom+" to "+standingsTo:""}</p></div><Trophy size={19} className="muted"/></div>
-      <div className="table-scroll"><table><thead><tr><th scope="col">#</th><th scope="col">{t("dash.club")}</th><th scope="col">{t("dash.matchesPlayed")}</th><th className="mobile-priority-column" scope="col">{t("dash.goalDifference")}</th><th className="mobile-priority-column" scope="col">{t("dash.points")}</th><th scope="col">{t("dash.wins")}</th><th scope="col">{t("dash.draws")}</th><th scope="col">{t("dash.losses")}</th>{detailed&&<><th scope="col">{t("dash.goalsFor")}</th><th scope="col">{t("dash.goalsAgainst")}</th></>}<th scope="col">{t("dash.goalDifference")}</th><th scope="col">{t("dash.points")}</th>{detailed&&<th scope="col">{t("standings.form")}</th>}</tr></thead>
-        <tbody>{teams.map(t=>{const position=tableTeams.indexOf(t)+1;const zone=zoneFor(position,t.id);return <tr key={t.id} className={zone?`standing-zone-${zone.className}`:undefined}><td><span className={"rank "+(position<=4?"top ":"")+(zone?.className??"")} title={zone?.label}>{position}</span></td><td><button className="club-link" onClick={()=>{setTeamId(t.id);setQuery("");setWeek("all");setView("results");}}><Badge name={t.name} logos={data!.logos}/><span className="desktop-team-name">{data!.fullTeamNames?.[t.name] ?? t.name}</span><span className="mobile-team-name">{data!.shortTeamNames?.[String(t.id)] ?? abbreviate(t.name)}</span></button></td><td>{t.played}</td><td className="mobile-priority-column">{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="mobile-priority-column points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td><td>{t.won}</td><td>{t.drawn}</td><td>{t.lost}</td>{detailed&&<><td>{t.gf}</td><td>{t.ga}</td></>}<td>{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td>{detailed&&<td><Form values={t.form}/></td>}</tr>})}</tbody></table></div>
+      <div className="table-scroll"><table><thead><tr><th scope="col">#</th><th scope="col">{t("dash.club")}</th><th scope="col">{t("dash.matchesPlayed")}</th><th className="mobile-priority-column" scope="col">+/-</th><th className="mobile-priority-column" scope="col">{t("dash.points")}</th><th scope="col">{t("dash.wins")}</th><th scope="col">{t("dash.draws")}</th><th scope="col">{t("dash.losses")}</th>{detailed&&<><th scope="col">{t("dash.goalsFor")}</th><th scope="col">{t("dash.goalsAgainst")}</th></>}<th scope="col">+/-</th><th scope="col">{t("dash.points")}</th>{detailed&&<th scope="col">{t("standings.form")}</th>}</tr></thead>
+        <tbody>{teams.map(t=>{const position=tableTeams.indexOf(t)+1;const zone=zoneFor(position,t.id);return <tr key={t.id} className={zone?`standing-zone-${zone.className}`:undefined}><td><span className={"rank "+(position<=4?"top ":"")+(zone?.className??"")} title={zone?.label}>{position}</span></td><td><button className="club-link" onClick={()=>{setTeamId(t.id);setQuery("");setWeek("all");setView("results");}}><Badge name={t.name} logos={data!.logos}/><span className="desktop-team-name">{data!.fullTeamNames?.[t.name] ?? t.name}</span><span className="mobile-team-name">{data!.shortTeamNames?.[String(t.id)] ?? abbreviate(t.name)}</span></button></td><td>{t.played}</td><td className="mobile-priority-column">{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="mobile-priority-column points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td><td>{t.won}</td><td>{t.drawn}</td><td>{t.lost}</td>{detailed&&<><td>{t.gf}</td><td>{t.ga}</td></>}<td>{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td>{detailed&&<td><StandingsForm matches={tableMatches} teamId={t.id} venue={venue} locale={locale}/></td>}</tr>})}</tbody></table></div>
       {!teams.length&&<p className="empty">No clubs match your search.</p>}
       <div className="panel-footer">{!full&&<button className="text-button" onClick={()=>selectView("standings")}>{t("dash.fullStandings")} <ArrowRight size={13}/></button>}</div>
       {showZones&&<div className="standings-legend" aria-label={t("dash.qualificationPlaces")}><span className="legend-champions">{t("dash.champions")}</span><span className="legend-champions-league">{t("dash.championsLeague")}</span><span className="legend-europa-league">{t("dash.europaLeague")}</span><span className="legend-conference-league">{t("dash.conferenceLeague")}</span><span className="legend-relegation-playoff">{t("dash.relegationPlayoff")}</span><span className="legend-relegated">{t("dash.relegated")}</span></div>}
       {unavailable>0&&<p className="coverage-note">{unavailable} played matches have no imported {periodText(period).toLowerCase()} score. They are excluded from this table.</p>}
+      <InsightsPlaceholder insightType="standings" description="Future analysis of league-position changes, recent form and season-long performance patterns." />
     </section>;
   }
 
@@ -623,7 +741,24 @@ export default function Dashboard() {
     ];
     const selectedTrend=trendOptions.find(option=>option.id===overviewMetric)!;
     const standingHeader=<div className="overview-table-header"><span>#</span><span>Club</span><span>MP</span><span>GD</span><span>Pts</span></div>;
-    const standingRow=(team:Team,index:number)=><button key={team.id} onClick={()=>{setTeamId(team.id);setView("results");}}><span className="rank">{index+1}</span><Badge name={team.name} logos={data!.logos}/><strong>{data!.shortTeamNames?.[String(team.id)] ?? abbreviate(team.name)}</strong><span>{team.played}</span><span>{team.gf-team.ga>0?"+":""}{team.gf-team.ga}</span><b>{team.points}</b></button>;
+    const configuredOverviewOutcomes=selectedSeasonConfig?.summary?.outcomes??selectedSeasonConfig?.outcomes??[];
+    const summary=selectedSeasonConfig?.summary;
+    const findConfiguredTeamId=(value:string|number)=>{
+      if(typeof value === "number") return value;
+      const key=normalizedTeamLabel(value);
+      const exact=data!.teams.find(team=>normalizedTeamLabel(team.name)===key);
+      if(exact)return exact.id;
+      const matching=data!.teams.find(team=>{const teamKey=normalizedTeamLabel(team.name);return teamKey.endsWith(key)||key.endsWith(teamKey);});
+      return matching?.id;
+    };
+    const compatibilityOutcomes=[...(summary?.european_qualifications??[]).flatMap(item=>{
+      const teamIds=(item.teams??[]).map(findConfiguredTeamId).filter((id):id is number=>Number.isInteger(id));
+      return teamIds.length?[{type:"qualification",competitionId:item.competition,label:item.competition,teamIds}]:[];
+    }),...(summary?.relegated??[]).map(findConfiguredTeamId).filter((id):id is number=>Number.isInteger(id)).length?[{type:"relegated",competitionId:"bundesliga",label:"Relegated",teamIds:(summary?.relegated??[]).map(findConfiguredTeamId).filter((id):id is number=>Number.isInteger(id))}]:[]];
+    const overviewOutcomes=[...configuredOverviewOutcomes,...compatibilityOutcomes];
+    const overviewZoneFor=(teamId:number,position:number)=>data?.season==="2025-2026"&&position===6?{className:"conference-league",label:t("dash.conferenceLeague")}:data?.season==="2025-2026"&&position===7?null:data?.season==="2025-2026"&&position===16?{className:"relegation-playoff",label:t("dash.relegationPlayoff")}:configuredStandingsZone(overviewOutcomes,teamId,{champions:t("dash.champions"),championsLeague:t("dash.championsLeague"),europaLeague:t("dash.europaLeague"),conferenceLeague:t("dash.conferenceLeague"),relegationPlayoff:t("dash.relegationPlayoff"),relegated:t("dash.relegated")});
+    const standingRow=(team:Team,index:number)=>{const position=index+1,zone=overviewZoneFor(team.id,position);return <button key={team.id} onClick={()=>setTeamId(team.id)}><span className={"rank "+(zone?.className??"")} title={zone?.label}>{position}</span><Badge name={team.name} logos={data!.logos}/><strong>{data!.shortTeamNames?.[String(team.id)] ?? abbreviate(team.name)}</strong><span>{team.played}</span><span>{team.gf-team.ga>0?"+":""}{team.gf-team.ga}</span><b>{team.points}</b></button>;};
+    const displayedZoneClasses=new Set<StandingsZone["className"]>(overviewTable.map((team,index)=>overviewZoneFor(team.id,index+1)?.className).filter((value):value is StandingsZone["className"]=>Boolean(value)));
     return <div className="overview-dashboard">
       <div className="overview-summary-cards overview-summary-cards-main" aria-label="Latest matchday summary">
         <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.totalGoals")}</span><strong className="overview-kpi-value">{overviewResults.length?overviewSummary.goals:"-"}</strong><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
@@ -644,7 +779,7 @@ export default function Dashboard() {
         </section>
         <section className="panel overview-standings">
           <div className="panel-heading"><div><span className="eyebrow">{t("dash.leagueStandings")}</span><h2>{t("dash.currentTable")}</h2><p className="match-range">{t("dash.completedFixtures")}</p></div><button className="text-button" onClick={()=>selectView("standings")}>{t("dash.fullStandings")} <ArrowRight size={13}/></button></div>
-           <div className="overview-table"><div className="overview-table-rows"><div className="overview-table-half">{standingHeader}{overviewTable.slice(0,9).map((team,index)=>standingRow(team,index))}</div><div className="overview-table-half">{standingHeader}{overviewTable.slice(9).map((team,index)=>standingRow(team,index+9))}</div></div></div>
+           <div className="overview-table"><div className="overview-table-rows"><div className="overview-table-half">{standingHeader}{overviewTable.slice(0,9).map((team,index)=>standingRow(team,index))}</div><div className="overview-table-half">{standingHeader}{overviewTable.slice(9).map((team,index)=>standingRow(team,index+9))}</div></div>{displayedZoneClasses.size>0&&<div className="overview-zone-legend"><>{displayedZoneClasses.has("champions")&&<span className="champions">{t("dash.champions")}</span>}{displayedZoneClasses.has("champions-league")&&<span className="champions-league">{t("dash.championsLeague")}</span>}{displayedZoneClasses.has("europa-league")&&<span className="europa-league">{t("dash.europaLeague")}</span>}{displayedZoneClasses.has("conference-league")&&<span className="conference-league">{t("dash.conferenceLeague")}</span>}{displayedZoneClasses.has("relegation-playoff")&&<span className="relegation-playoff">{t("dash.relegationPlayoff")}</span>}{displayedZoneClasses.has("relegated")&&<span className="relegated">{t("dash.relegated")}</span>}</></div>}</div>
         </section>
       </div>
       <section className="panel overview-trends">
@@ -653,6 +788,7 @@ export default function Dashboard() {
         <div className="trend-summary" aria-label={`${selectedTrend.label} summary`}><div><span>{t("dash.seasonAverage")}</span><strong>{overviewTrendSummary.average===null?"?":overviewTrendSummary.average.toFixed(selectedTrend.percent?1:2)+(selectedTrend.percent?"%":"")}</strong><small>{t("dash.eligibleCompleted")}</small></div><div><span>{t("dash.latestMatchdayLabel")}</span><strong>{overviewTrendSummary.latest===null?"?":overviewTrendSummary.latest.toFixed(selectedTrend.percent?1:2)+(selectedTrend.percent?"%":"")}</strong><small>{overviewTrend.length?matchdayText(overviewTrend.at(-1)!.week):"No completed matchday"}</small></div></div>
         <LeagueTrendChartAllExtremes points={overviewTrendWithExtremes} label={selectedTrend.label} percentValue={selectedTrend.percent}/>
       </section>
+      <InsightsPlaceholder insightType="overview-trends" description="Future analysis of season trends, standout performances and significant changes across matchdays." />
     </div>;
   }
 
@@ -672,6 +808,7 @@ export default function Dashboard() {
         <div className="page-heading"><div><span className="eyebrow"><span className="germany-flag"/> {t("global.germany")} · {t("global.bundesliga")}</span><h1>{view==="teamAnalysis"?t("teamAnalysis.title"):t(`page.${view}`)}</h1><p>{view==="overview"?shortSeason(data?.season||""):(view==="teams"||view==="players")?t("global.developing"):view==="history"?t("page.historyDescription"):view==="teamAnalysis"?t("teamAnalysis.subtitle"):view==="results"?t("page.resultsDescription"):t("page.description")}</p></div>
 
         </div>
+        {view==="overview"&&<div className="overview-page-context">{shortSeason(data?.season||"")}{latestCompletedWeek?` ${String.fromCharCode(8211)} ${matchdayText(latestCompletedWeek)}`:""}{overviewResults[0]?.date?` ${String.fromCharCode(8211)} ${displayDate(overviewResults[overviewResults.length-1]?.date??overviewResults[0].date,locale)}`:""}</div>}
 
         {view!=="overview"&&view!=="teams"&&view!=="players"&&view!=="teamAnalysis"&&view!=="history"&&<div className={"filter-bar"+(view==="results"?" results-toolbar":"")+(view==="standings"?(standingsFiltersOpen?" standings-filter-bar filters-open":" standings-filter-bar"):"")} role="group" aria-label={view==="upcoming"?"Upcoming matchday filter":"Season and matchday filters"}>
           {view==="standings"&&<button type="button" className="standings-filter-toggle" aria-expanded={standingsFiltersOpen} onClick={()=>setStandingsFiltersOpen(value=>!value)}><span>Filters &middot; {shortSeason(season||data?.season||"")} &middot; MD {standingsFrom}&#8211;{standingsTo}</span><ChevronDown size={16}/></button>}

@@ -272,6 +272,33 @@ export default function BundesligaHistory({ data }: Props) {
       return { ...record, seasons: matchingHistory?.seasons ?? record.seasons.size };
     }).sort((a, b) => b.total - a.total || a.name.localeCompare(b.name));
   }, [allSeasonNames, data.seasonConfigs, historicalTeamStats]);
+  const resolveHistoricalClub = (name: string) => historicalTeamStats.find(item => {
+      const left = normalize(item.name); const right = normalize(name);
+      return left === right || left.endsWith(right) || right.endsWith(left);
+  });
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      const achievementRow = (event.target as HTMLElement).closest(".history-records-achievements .history-alltime-row:not(.history-alltime-head)");
+      if (achievementRow) { setRecordView("overview"); return; }
+      const row = (event.target as HTMLElement).closest(".history-records-european .history-alltime-row:not(.history-alltime-head)");
+      if (!row) return;
+      const rows = [...(row.parentElement?.querySelectorAll(".history-alltime-row:not(.history-alltime-head)") ?? [])];
+      const index = rows.indexOf(row);
+      const filtered = europeanQualificationRecords.filter(item => item.name.toLocaleLowerCase().includes(recordQuery.toLocaleLowerCase()));
+      const selected = filtered[index];
+      const club = selected ? resolveHistoricalClub(selected.name) : undefined;
+      if (club) { setRecordView("overview"); setSelectedHistoryClub(club.id); setComparisonHistoryClub(null); }
+    };
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [europeanQualificationRecords, historicalTeamStats, recordQuery]);
+  useEffect(() => {
+    const filtered = europeanQualificationRecords.filter(item => item.name.toLocaleLowerCase().includes(recordQuery.toLocaleLowerCase()));
+    document.querySelectorAll(".history-records-european .history-alltime-row:not(.history-alltime-head)").forEach((element, index) => {
+      const club = filtered[index] ? resolveHistoricalClub(filtered[index].name) : undefined;
+      element.classList.toggle("selected", club?.id === selectedHistoryClub);
+    });
+  }, [europeanQualificationRecords, historicalTeamStats, recordQuery, selectedHistoryClub]);
   const europeanCompetitionNames = europeanCompetitionOrder;
   const enterState = (name: string) => { if (stateLeaveTimer.current) clearTimeout(stateLeaveTimer.current); setHoveredState(name); };
   const leaveState = () => { stateLeaveTimer.current = setTimeout(() => { if (!selectedState) setHoveredState(null); }, 140); };
@@ -374,8 +401,8 @@ export default function BundesligaHistory({ data }: Props) {
           <div className="history-kpis history-season-kpis"><span>Total games<b>{matches.length}</b></span><span>Total goals<b>{seasonGoalStats.totalGoals}</b></span><span>Average goals per game<b>{seasonGoalStats.averageGoals.toFixed(2)}</b></span></div>
           <div className="history-record-cards"><div className="history-record-card"><span>Largest home win</span>{recordMatch(seasonGoalStats.largestHomeWin)}</div><div className="history-record-card"><span>Largest away win</span>{recordMatch(seasonGoalStats.largestAwayWin)}</div></div>
           {championName && <div className="history-champion-block"><span className="history-summary-label">{t("dash.championLabel")}</span><p className="history-champion"><Trophy size={15}/> {championName}</p></div>}
-          {importedQualifications.length > 0 && <div className="history-outcome-groups"><strong>{t("dash.europeanQualifications")}</strong>{orderedQualifications.map(item => <div className={`history-outcome-group competition-${item.colorCompetition}`} key={item.competition}><span>{item.competition}</span><em>{item.teams.join(", ")}</em></div>)}</div>}
-          {importedRelegated.length > 0 && <div className="history-outcome-groups history-relegated-groups"><div className="history-outcome-group competition-relegated"><span>{t("dash.relegated")}</span><em>{importedRelegated.join(", ")}</em></div></div>}
+          {importedQualifications.length > 0 && <div className="history-outcome-groups"><strong>{t("dash.europeanQualifications")}</strong>{orderedQualifications.map(item => <div className={`history-outcome-group competition-${item.colorCompetition}`} key={item.competition}><span>{item.competition}</span><em>{item.teams.join(" | ")}</em></div>)}</div>}
+          {importedRelegated.length > 0 && <div className="history-outcome-groups history-relegated-groups"><div className="history-outcome-group competition-relegated"><span>{t("dash.relegated")}</span><em>{importedRelegated.join(" | ")}</em></div></div>}
         </>}
       </aside>
     </section>

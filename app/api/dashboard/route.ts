@@ -42,20 +42,21 @@ export async function GET(request: Request) {
       _id:0,game_id:1,season:1,game_date:1,week:1,home_team_id:1,away_team_id:1,
       home_team_name:1,away_team_name:1,home_goals:1,away_goals:1,game_status:1,venue:1,attendance:1
     };
-    const [schedule, historicalSchedule, historicalResults, rows, availableTeams, seasonConfigRows] = await Promise.all([
+    const [schedule, historicalSchedule, historicalResults, availableTeams, seasonConfigRows] = await Promise.all([
       db.collection("game_schedule").find({...filter,season}, {projection:{
         _id:0,game_id:1,season:1,game_date:1,week:1,home_team_id:1,away_team_id:1,
         home_team_name:1,away_team_name:1,home_goals:1,away_goals:1,game_status:1,venue:1,attendance:1
       }}).limit(1000).toArray(),
       db.collection("game_schedule").find({...filter,game_status:"finished"},{projection:scheduleProjection}).sort({game_date:-1}).limit(10000).toArray(),
       db.collection("historical_results").find({season:includeHistory?{$in:seasons}:season},{projection:{_id:1,season:1,week:1,game_date:1,home_team_id:1,away_team_id:1,home_team_name:1,away_team_name:1,home_team_goals:1,away_team_goals:1,home_team_goals_ft:1,away_team_goals_ft:1,cancelled:1}}).sort({game_date:-1}).limit(includeHistory?50000:2000).toArray().catch(() => [] as any[]),
-      db.collection("game_team_stats").find({...filter,season}, {projection:Object.fromEntries([
-        ["_id",0],["game_id",1],["team_id",1],
-        ...PERIODS.flatMap(p=>["goals","own_goals","shots","shot_on_target","shot_off_target","shot_blocked","shot_woodwork","shot_zone_inside_box","shot_zone_outside_box","shot_set_piece","shot_fastbreak","shot_open_play","shot_penalty","possession","touches","loss_of_possession","dispossessed","turnover","pass_attempt","pass_completed","pass_completion_pct","pass_key_pass","pass_assist","pass_through_ball","pass_forward","pass_backward","pass_cross","pass_cross_completed","pass_cross_completion_pct","pass_corner","pass_long","pass_long_completed","pass_long_completion_pct","pass_final_third","pass_final_third_completed","pass_final_third_completion_pct","tackles_attempted","tackle_gained_possession","tackle_success_pct","interceptions","clearances","blocks","blocked_shot","errors","ball_recoveries","dribbles","dribble_successful","offsides","foul_suffered","foul_committed","aerial_duels","aerial_duel_won","saves","goalkeeper_actions","claims","punches","keeper_pickup","keeper_sweeper","cards","yellow_card","second_yellow_card","red_card","shot_accuracy","goal_conversion_pct"].map(key=>["stats."+p.value+"."+key,1]))
-      ])}).limit(2000).toArray(),
       db.collection("available_teams").find({}, {projection:{_id:0,ws_team_id:1,ws_team_name:1,fbre_team_name:1,short_name:1,team_name:1,team_logo:1,stadium_logo:1,stadium_name:1,city:1,state:1,latitude:1,longitude:1}}).limit(1000).toArray(),
       db.collection("season_config").find({season:{$in:seasons}},{projection:{_id:0,competition:1,season:1,start_year:1,end_year:1,rules:1,points:1,standings_tiebreakers:1,standingsTiebreakers:1,data_availability:1,dataAvailability:1,summary:1,outcomes:1,classifications:1,champion_team_id:1,championTeamId:1,relegated_team_ids:1,relegatedTeamIds:1,promoted_team_ids:1,promotedTeamIds:1}}).toArray().catch(() => [] as any[])
     ]);
+    const scheduleGameIds = schedule.map((row: any) => row.game_id).filter((id: unknown): id is number => typeof id === "number");
+    const rows = scheduleGameIds.length ? await db.collection("game_team_stats").find({game_id:{$in:scheduleGameIds}}, {projection:Object.fromEntries([
+      ["_id",0],["game_id",1],["team_id",1],
+      ...PERIODS.flatMap(p=>["goals","own_goals","shots","shot_on_target","shot_off_target","shot_blocked","shot_woodwork","shot_zone_inside_box","shot_zone_outside_box","shot_set_piece","shot_fastbreak","shot_open_play","shot_penalty","possession","touches","loss_of_possession","dispossessed","turnover","pass_attempt","pass_completed","pass_completion_pct","pass_key_pass","pass_assist","pass_through_ball","pass_forward","pass_backward","pass_cross","pass_cross_completed","pass_cross_completion_pct","pass_corner","pass_long","pass_long_completed","pass_long_completion_pct","pass_final_third","pass_final_third_completed","pass_final_third_completion_pct","tackles_attempted","tackle_gained_possession","tackle_success_pct","interceptions","clearances","blocks","blocked_shot","errors","ball_recoveries","dribbles","dribble_successful","offsides","foul_suffered","foul_committed","aerial_duels","aerial_duel_won","saves","goalkeeper_actions","claims","punches","keeper_pickup","keeper_sweeper","cards","yellow_card","second_yellow_card","red_card","shot_accuracy","goal_conversion_pct"].map(key=>["stats."+p.value+"."+key,1]))
+    ])}).limit(2000).toArray() : [];
     const goalRows = await db.collection("game_key_events").find({game_id:{$in:schedule.filter(d=>typeof d.game_id === "number").map(d=>d.game_id)},event_type:"goal"},{projection:{_id:0,game_id:1,team_id:1,player_name:1,minute:1,added_time:1,event_subtype:1}}).sort({minute:1}).toArray();
     const teamMeta = new Map(availableTeams.filter(d=>typeof d.ws_team_id === "number").map(d=>[d.ws_team_id,d]));
     const teamMetaByName = new Map<string, any>();
@@ -153,8 +154,8 @@ export async function GET(request: Request) {
       const summary = row.summary && typeof row.summary === "object" ? row.summary : {};
       const names = seasonTeamNames.get(row.season) ?? new Map<string, number>();
       const resolveNames = (values: unknown) => (Array.isArray(values) ? values : [values])
-        .filter((value): value is string => typeof value === "string")
-        .map(value => names.get(normalize(value)))
+        .filter((value): value is string | number => typeof value === "string" || typeof value === "number")
+        .map(value => typeof value === "number" ? value : names.get(normalize(value)) ?? teamMetaByName.get(normalize(value))?.ws_team_id)
         .filter((value): value is number => Number.isInteger(value));
       const classifications: SeasonOutcomeClassification[] = [];
       const source = Array.isArray(summary.outcomes) ? summary.outcomes : (Array.isArray(summary.classifications) ? summary.classifications : []);

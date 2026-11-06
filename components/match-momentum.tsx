@@ -7,7 +7,7 @@ type MatchMomentumProps = {
 export default function MatchMomentum({homeName, awayName}: MatchMomentumProps) {
   const {t}=useI18n();
   const labels = ["0'", "15'", "30'", "HT", "60'", "75'", "90'"];
-  return <section className="match-momentum" aria-label={t("report.matchMomentum")}>
+  return <section className="match-momentum unavailable" aria-label={t("report.matchMomentum")}>
     <div className="match-momentum-heading">
       <div className="momentum-legend"><span className="momentum-home">{homeName}</span><span className="momentum-away">{awayName}</span></div>
     </div>
