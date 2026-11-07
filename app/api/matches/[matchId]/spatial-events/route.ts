@@ -18,7 +18,7 @@ async function allEvents(gameId:number,profile?:Record<string,number>){
   const db=await database();
   if(profile)profile.database=performance.now()-dbStarted;
   const queryStarted=performance.now();
-  const rows=await db.collection("game_processed_events").find({game_id:gameId},{projection:{_id:0,event_idx:1,team_id:1,team:1,player_id:1,recipient_id:1,pass_recipient_id:1,related_player_id:1,player:1,type:1,event_type:1,outcome_type:1,minute:1,second:1,period:1,x:1,y:1,end_x:1,end_y:1,pass_completed:1,pass_successful:1,shot_result:1,shot_goal:1,shot_on_target:1,shot_blocked:1,categories:1}}).sort({event_idx:1}).toArray();
+  const rows=await db.collection("game_processed_events_app").find({game_id:gameId},{projection:{_id:0,event_idx:1,team_id:1,team:1,player_id:1,recipient_id:1,pass_recipient_id:1,related_player_id:1,player:1,type:1,event_type:1,outcome_type:1,minute:1,second:1,period:1,x:1,y:1,end_x:1,end_y:1,pass_completed:1,pass_successful:1,shot_result:1,shot_goal:1,shot_on_target:1,shot_blocked:1,categories:1}}).sort({event_idx:1}).toArray();
   if(profile)profile.query=performance.now()-queryStarted;
   const normalizeStarted=performance.now();
   const events=rows.map(normalize);

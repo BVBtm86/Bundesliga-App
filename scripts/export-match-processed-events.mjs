@@ -11,7 +11,7 @@ if (!matchId) {
 
 const mongoUri = process.env.MONGO_URI ?? "mongodb://localhost:27017";
 const databaseName = process.env.MONGO_DATABASE ?? "WhoScored";
-const collectionName = process.env.MONGO_COLLECTION ?? "game_processed_events";
+const collectionName = process.env.MONGO_COLLECTION ?? "game_processed_events_app";
 const numericMatchId = Number(matchId);
 const ids = Number.isSafeInteger(numericMatchId) ? [numericMatchId, matchId] : [matchId];
 
@@ -33,7 +33,7 @@ try {
   await mkdir(outputDirectory, { recursive: true });
   await writeFile(outputPath, `${JSON.stringify(events, null, 2)}\n`, "utf8");
 
-  for (const sequenceCollection of ["game_shot_sequences", "game_pass_sequences"]) {
+  for (const sequenceCollection of ["game_shot_sequences_app", "game_pass_sequences_app"]) {
     const sequences = await client
       .db(databaseName)
       .collection(sequenceCollection)

@@ -5,9 +5,9 @@ type SequenceAction = { eventIdx:number|null; sequenceEvent:number|null; teamId:
 type SequenceOrigin = { type:string|null; eventId:number|null; eventType:string|null; playerId:number|null; playerName:string|null; teamId:number|null; minute:number|null; second:number|null; x:number|null; y:number|null; evidence:string|null };
 type Sequence = { id:string; teamId:number|null; team:string|null; actions:SequenceAction[]; ending:string|null; origin:SequenceOrigin|null };
 
-const APP_EVENTS = "game_processed_events";
-const APP_SHOTS = "game_shot_sequences";
-const APP_PASSES = "game_pass_sequences";
+const APP_EVENTS = "game_processed_events_app";
+const APP_SHOTS = "game_shot_sequences_app";
+const APP_PASSES = "game_pass_sequences_app";
 const finite=(value:unknown)=>{const n=typeof value==="number"?value:Number(value);return Number.isFinite(n)?n:null;};
 const bool=(value:unknown)=>value===true||value===1||value==="true"||value==="Successful";
 const hasCategory=(row:any, category:string)=>Array.isArray(row.categories)&&row.categories.includes(category);

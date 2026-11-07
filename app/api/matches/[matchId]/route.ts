@@ -11,8 +11,8 @@ export async function GET(_: Request, {params}:{params:Promise<{matchId:string}>
     const db=await database();
     const [schedule,statRows,shotRows,lineupRows,teams,formationRows]=await Promise.all([
       db.collection("game_schedule").findOne({game_id:gameId,competition_name:"Bundesliga"},{projection:{_id:0,game_id:1,season:1,week:1,game_date:1,home_team_id:1,away_team_id:1,home_team_name:1,away_team_name:1,home_goals:1,away_goals:1,game_status:1,venue:1,attendance:1,home_manager:1,away_manager:1}}),
-      db.collection("game_team_stats").find({game_id:gameId},{projection:{_id:0,game_id:1,team_id:1,stats:1}}).toArray(),
-      db.collection("game_processed_events").find({game_id:gameId,categories:"shot"},{projection:{_id:0,event_idx:1,team_id:1,team:1,player_id:1,player:1,minute:1,second:1,period:1,x:1,y:1,end_x:1,end_y:1,shot_result:1,shot_goal:1,shot_on_target:1,shot_blocked:1,shot_woodwork:1,shot_own_goal:1,shot_situation:1,outcome_type:1,categories:1}}).sort({event_idx:1}).toArray(),
+      db.collection("game_team_stats_app").find({game_id:gameId},{projection:{_id:0,game_id:1,team_id:1,stats:1}}).toArray(),
+      db.collection("game_processed_events_app").find({game_id:gameId,categories:"shot"},{projection:{_id:0,event_idx:1,team_id:1,team:1,player_id:1,player:1,minute:1,second:1,period:1,x:1,y:1,end_x:1,end_y:1,shot_result:1,shot_goal:1,shot_on_target:1,shot_blocked:1,shot_woodwork:1,shot_own_goal:1,shot_situation:1,outcome_type:1,categories:1}}).sort({event_idx:1}).toArray(),
       db.collection("game_lineups").find({game_id:gameId,competition_name:"Bundesliga"},{projection:{_id:0,team_id:1,player_id:1,player_name:1,jersey_number:1,starting_lineup:1,starting_position:1,lineup_order:1,formation_slot:1}}).toArray(),
       db.collection("available_teams").find({},{projection:{_id:0,ws_team_id:1,team_logo:1}}).toArray(),
       db.collection("game_formations").find({game_id:gameId,competition_name:"Bundesliga"},{projection:{_id:0,team_id:1,formation:1,positions:1}}).toArray()

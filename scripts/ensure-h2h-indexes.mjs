@@ -24,7 +24,7 @@ try {
       { season: 1, game_date: -1 },
       { name: "dashboard_historical_lookup" },
     ),
-    db.collection("game_team_stats").createIndex(
+    db.collection("game_team_stats_app").createIndex(
       { competition_name: 1, season: 1, game_id: 1 },
       { name: "dashboard_team_stats_lookup" },
     ),

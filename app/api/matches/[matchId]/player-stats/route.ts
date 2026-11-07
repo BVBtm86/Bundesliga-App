@@ -15,7 +15,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
     const db = await database();
     const [schedule, statsRows, lineupRows, keyEvents] = await Promise.all([
       db.collection("game_schedule").findOne({ game_id: gameId }, { projection: { _id: 0, home_team_id: 1, away_team_id: 1 } }),
-      db.collection("game_player_stats").find({ game_id: gameId }, { projection: { _id: 0 } }).toArray(),
+      db.collection("game_player_stats_app").find({ game_id: gameId }, { projection: { _id: 0 } }).toArray(),
       db.collection("game_lineups").find({ game_id: gameId }, { projection: { _id: 0, team_id: 1, player_id: 1, player_name: 1, jersey_number: 1, starting_lineup: 1, starting_position: 1 } }).toArray(),
       db.collection("game_key_events").find({ game_id: gameId, event_type: "substitution" }, { projection: { _id: 0, player_id: 1, related_player_id: 1, minute: 1, minute_value: 1 } }).toArray(),
     ]);
