@@ -14,7 +14,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
   try {
     const db = await database();
     const [schedule, statsRows, lineupRows, keyEvents] = await Promise.all([
-      db.collection("game_schedule").findOne({ game_id: gameId }, { projection: { _id: 0, home_team_id: 1, away_team_id: 1 } }),
+      db.collection("game_schedule").findOne({ game_id: gameId }, { projection: { _id: 0, season: 1, home_team_id: 1, away_team_id: 1 } }),
       db.collection("game_player_stats_app").find({ game_id: gameId }, { projection: { _id: 0 } }).toArray(),
       db.collection("game_lineups").find({ game_id: gameId }, { projection: { _id: 0, team_id: 1, player_id: 1, player_name: 1, jersey_number: 1, starting_lineup: 1, starting_position: 1 } }).toArray(),
       db.collection("game_key_events").find({ game_id: gameId, event_type: "substitution" }, { projection: { _id: 0, player_id: 1, related_player_id: 1, minute: 1, minute_value: 1 } }).toArray(),
@@ -65,7 +65,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
       }];
     });    const availablePeriods = Array.from(new Set(players.flatMap((player) => Object.keys(player.periods))));
     const orderedPeriods = ["ft", "fh", "sh", ...availablePeriods.filter((period) => !["ft", "fh", "sh", "per_90"].includes(period)), "per_90"].filter((period, index, all) => all.indexOf(period) === index);
-    return NextResponse.json({ homeTeamId: numberOrNull(schedule.home_team_id), awayTeamId: numberOrNull(schedule.away_team_id), availablePeriods: orderedPeriods, players }, { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" } });
+    return NextResponse.json({ season: schedule.season ?? null, homeTeamId: numberOrNull(schedule.home_team_id), awayTeamId: numberOrNull(schedule.away_team_id), availablePeriods: orderedPeriods, players }, { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" } });
   } catch (error) {
     console.error("Player statistics unavailable:", error instanceof Error ? error.name : "Unknown error");
     return NextResponse.json({ error: "Player statistics are unavailable." }, { status: 503 });
