@@ -468,7 +468,7 @@ export default function Dashboard() {
   const seasonPartText=(value:SeasonPart)=>value==="first"?t("dash.firstHalf"):value==="second"?t("dash.secondHalf"):t("dash.fullSeason");
   const venueText=(value:VenueFilter)=>value==="home"?t("dash.home"):value==="away"?t("dash.away"):t("dash.allVenues");
   const [data,setData]=useState<Data|null>(null);
-  const dashboardCache=useRef(new Map<string,Data>());
+  const dashboardCache=useRef(new Map<string,{body:Data;expiresAt:number}>());
   const [season,setSeason]=useState("");
   const [loading,setLoading]=useState(true);
   const [error,setError]=useState("");
@@ -503,28 +503,32 @@ export default function Dashboard() {
     setLoading(true);setError("");setSelected(null);
     const requestedSeason = seasonSelectable ? season : "";
     const cacheKey=`${requestedSeason||"latest"}:${historyDataRequired?"history-v3":"compact"}:${revision}`;
+    const applyDashboard=(body:Data)=>{
+      const changed=loadedSeason.current!==body.season;
+      loadedSeason.current=body.season;
+      setData(body);
+      if(changed){
+        const mode:FixtureMode=view==="upcoming"?"upcoming":"results";
+        setWeek(String(defaultMatchday(body.matches,mode)??""));setTeamId(null);
+      }else setTeamId(previous=>body.teams.some(t=>t.id===previous)?previous:null);
+    };
     const cached=dashboardCache.current.get(cacheKey);
-    if(cached){
-      setData(cached); setLoading(false);
+    if(cached && cached.expiresAt>Date.now()){
+      applyDashboard(cached.body);setLoading(false);
       return ()=>controller.abort();
     }
     const params=new URLSearchParams();
     if(requestedSeason)params.set("season",requestedSeason);
     if(historyDataRequired){params.set("includeHistory","1");params.set("historyVersion","3");}
-    fetch("/api/dashboard"+(params.size?`?${params.toString()}`:""),{signal:controller.signal,cache:"force-cache"})
+    fetch("/api/dashboard"+(params.size?`?${params.toString()}`:""),{signal:controller.signal,cache:"no-store"})
       .then(async response=>{
         const body=await response.json();
         if(!response.ok)throw new Error(body.error??"Unable to load the dashboard.");
         return body as Data;
       }).then(body=>{
-        const changed=loadedSeason.current!==body.season;
-        loadedSeason.current=body.season;
-        dashboardCache.current.set(cacheKey,body);
-        setData(body);
-        if(changed){
-          const mode:FixtureMode=view==="upcoming"?"upcoming":"results";
-          setWeek(String(defaultMatchday(body.matches,mode)??""));setTeamId(null);
-        }else setTeamId(previous=>body.teams.some(t=>t.id===previous)?previous:null);
+        if(controller.signal.aborted)return;
+        dashboardCache.current.set(cacheKey,{body,expiresAt:Date.now()+60_000});
+        applyDashboard(body);
       })
       .catch(err=>{if(err.name!=="AbortError")setError(err.message);})
       .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
@@ -533,14 +537,6 @@ export default function Dashboard() {
 
 
   const effectiveMode:FixtureMode=view==="upcoming"?"upcoming":"results";
-  // Demo mode: keep the final matchday of the current-season Upcoming view scheduled
-  // so the page can be previewed without changing MongoDB or historical results.
-  const demoUpcomingMatches=useMemo(()=>{
-    const matches=data?.matches??[];
-    if(view!=="upcoming"||!matches.length)return matches;
-    const finalWeek=Math.max(...matches.map(match=>match.week));
-    return matches.map(match=>match.week===finalWeek?{...match,finished:false,status:"scheduled" as const,homeGoals:null,awayGoals:null,attendance:null}:match);
-  },[data,view]);
   const seasonMatchdayCount=useMemo(()=>Math.max(1,...(data?.matches??[]).map(match=>match.week).filter(week=>week>0)),[data]);
   const historicalSeason=Boolean(data?.matches.some(match=>match.historical));
   useEffect(()=>{
@@ -550,7 +546,7 @@ export default function Dashboard() {
   useEffect(()=>{ if (historicalSeason) setPeriod("ft"); },[historicalSeason]);
   const activePeriod: MatchPeriod = historicalSeason ? "ft" : period;
   // Upcoming is deliberately fixture-only: it must not inherit result filters.
-  const phaseMatches=useMemo(()=>view==="upcoming"?demoUpcomingMatches:seasonSubset(data?.matches??[],seasonPart,seasonMatchdayCount),[data,seasonPart,view,demoUpcomingMatches,seasonMatchdayCount]);
+  const phaseMatches=useMemo(()=>view==="upcoming"?(data?.matches??[]):seasonSubset(data?.matches??[],seasonPart,seasonMatchdayCount),[data,seasonPart,view,seasonMatchdayCount]);
   const scoredMatches=useMemo(()=>view==="upcoming"?phaseMatches:scoresForPeriod(phaseMatches,data?.stats??[],activePeriod),[phaseMatches,data,activePeriod,view]);
   const fixtureMatches=useMemo(()=>fixturesForMode(scoredMatches,effectiveMode),[scoredMatches,effectiveMode]);
   const roundMatches=useMemo(()=>week==="all"?fixtureMatches:fixtureMatches.filter(m=>m.week===Number(week)),[fixtureMatches,week]);

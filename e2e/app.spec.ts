@@ -322,7 +322,8 @@ test("upcoming defaults to the next unplayed matchday and results defaults to th
   {...base,id:9002,date:"2026-10-17T15:30:00Z",week:8,finished:true,homeGoals:1,awayGoals:0},
   {...base,id:9003,date:"2026-10-25T15:30:00Z",week:9,finished:false,homeGoals:null,awayGoals:null},
   {...base,id:9004,date:"2026-10-21T15:30:00Z",week:7,finished:false,homeGoals:null,awayGoals:null},
-  {...base,id:9005,date:"2026-10-20T15:30:00Z",week:7,finished:true,homeGoals:0,awayGoals:0}
+  {...base,id:9005,date:"2026-10-20T15:30:00Z",week:7,finished:true,homeGoals:0,awayGoals:0},
+  {...base,id:9006,date:"2027-05-15T15:30:00Z",week:34,finished:true,homeGoals:3,awayGoals:1}
  ];
  await page.route("**/api/dashboard*",route=>route.fulfill({contentType:"application/json",body:JSON.stringify(payload)}));
  await page.goto("/upcoming");
@@ -332,19 +333,20 @@ test("upcoming defaults to the next unplayed matchday and results defaults to th
  await expect(page.locator(".match-score")).toHaveText("vs");
  await expect(page.locator(".history-fixture-meta")).toContainText("21 Oct 2026");
  await expect(page.locator(".metric-card")).toHaveCount(0);
+ await expect(page.getByLabel("Matchday",{exact:true}).locator('option[value="34"]')).toHaveCount(0);
  await page.getByLabel("Matchday",{exact:true}).selectOption("9");
  await page.getByRole("button",{name:"Refresh imported data"}).click();
  await expect(page.getByRole("button",{name:"Refresh imported data"})).toBeEnabled();
  await expect(page.getByLabel("Matchday",{exact:true})).toHaveValue("9");
  await navigate(page,"Matches");
  await expect(page).toHaveURL(/\/matches$/);
- await expect(page.getByLabel("Matchday",{exact:true})).toHaveValue("7");
+ await expect(page.getByLabel("Matchday",{exact:true})).toHaveValue("34");
  await expect(page.locator(".match-row")).toHaveCount(1);
- await expect(page.locator(".match-score")).toHaveText("0 – 0");
+ await expect(page.locator(".match-score")).toHaveText("3 – 1");
  await expect(page.locator(".metric-card")).toHaveCount(4);
  await page.getByLabel("Matchday",{exact:true}).selectOption("6");
  await navigate(page,"Matches");
- await expect(page.getByLabel("Matchday",{exact:true})).toHaveValue("7");
+ await expect(page.getByLabel("Matchday",{exact:true})).toHaveValue("34");
  await navigate(page,"Upcoming");
  await expect(page.getByLabel("Matchday",{exact:true})).toHaveValue("7");
  expect(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth)).toBe(false);

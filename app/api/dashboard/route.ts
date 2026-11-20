@@ -199,7 +199,7 @@ export async function GET(request: Request) {
     const selectedPointsForWin = selectedConfig?.rules?.pointsForWin ?? 3;
     const selectedPointsForDraw = selectedConfig?.rules?.pointsForDraw ?? 1;
     return NextResponse.json({seasons,season,matches,teams:standings(matches, "all", [], selectedPointsForWin, selectedConfig?.standingsTiebreakers, selectedPointsForDraw, selectedConfig),stats,historicalMatches,historicalPositions,logos,fullTeamNames,shortTeamNames,stadiums,teamLocations,seasonConfigs,goalscorers,fetchedAt:new Date().toISOString()},
-      {headers:{"Cache-Control":"private, max-age=60, stale-while-revalidate=300"}});
+      {headers:{"Cache-Control":"private, no-store"}});
   } catch (error) {
     console.error("Dashboard data unavailable:", error instanceof Error ? error.name : "Unknown error");
     return NextResponse.json({error:"The Bundesliga database is unavailable. Start the bundesliga-mongo container and check the app's MongoDB settings."},{status:503});
