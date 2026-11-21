@@ -65,7 +65,7 @@ export async function GET(_: Request, { params }: { params: Promise<{ matchId: s
       }];
     });    const availablePeriods = Array.from(new Set(players.flatMap((player) => Object.keys(player.periods))));
     const orderedPeriods = ["ft", "fh", "sh", ...availablePeriods.filter((period) => !["ft", "fh", "sh", "per_90"].includes(period)), "per_90"].filter((period, index, all) => all.indexOf(period) === index);
-    return NextResponse.json({ season: schedule.season ?? null, homeTeamId: numberOrNull(schedule.home_team_id), awayTeamId: numberOrNull(schedule.away_team_id), availablePeriods: orderedPeriods, players }, { headers: { "Cache-Control": "private, max-age=300, stale-while-revalidate=1800" } });
+    return NextResponse.json({ season: schedule.season ?? null, homeTeamId: numberOrNull(schedule.home_team_id), awayTeamId: numberOrNull(schedule.away_team_id), availablePeriods: orderedPeriods, players }, { headers: { "Cache-Control": players.length ? "private, max-age=300, stale-while-revalidate=1800" : "no-store" } });
   } catch (error) {
     console.error("Player statistics unavailable:", error instanceof Error ? error.name : "Unknown error");
     return NextResponse.json({ error: "Player statistics are unavailable." }, { status: 503 });

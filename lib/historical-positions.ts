@@ -39,7 +39,8 @@ export function buildHistoricalPositions(seasons: string[], matches: Match[], co
     );
     const participants = config?.teamCount ?? table.length;
     const expectedMatches = participants * (participants - 1);
-    const complete = table.length > 1 && table.length === participants && seasonMatches.length >= expectedMatches;
+    const playedFixtures = new Set(seasonMatches.map(match => `${match.homeId}:${match.awayId}`));
+    const complete = table.length > 1 && table.length === participants && playedFixtures.size === expectedMatches;
     if (!complete) return [];
     return table.map((row, index) => ({
       season,

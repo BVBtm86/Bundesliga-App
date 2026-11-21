@@ -48,7 +48,7 @@ export async function GET(_: Request, {params}:{params:Promise<{matchId:string}>
       });
       return {teamId:row.team_id,formationName:row.formation??template?.formation_name??null,formationKey:key,templateFound:Boolean(template),players:mapped};
     });
-    const cacheable=/(finished|complete|played|full.?time)/i.test(String(schedule.game_status??""));
+    const cacheable=statRows.length>0&&shotRows.length>0&&/(finished|complete|played|full.?time)/i.test(String(schedule.game_status??""));
     return NextResponse.json({match:{id:gameId,season:schedule.season,week:schedule.week,date:schedule.game_date,homeId:schedule.home_team_id,awayId:schedule.away_team_id,home:schedule.home_team_name,away:schedule.away_team_name,homeGoals:finite(schedule.home_goals),awayGoals:finite(schedule.away_goals),status:schedule.game_status,venue:schedule.venue??"",attendance:finite(schedule.attendance),homeManager:typeof schedule.home_manager==="string"?schedule.home_manager:null,awayManager:typeof schedule.away_manager==="string"?schedule.away_manager:null},stats,shots,lineups,playerNumbers,formations,logos:{[schedule.home_team_name]:teamMeta.get(schedule.home_team_id)??null,[schedule.away_team_name]:teamMeta.get(schedule.away_team_id)??null}}, {headers:{"Cache-Control":cacheable?"private, max-age=300, stale-while-revalidate=3600":"no-store","Server-Timing":`report;dur=${(performance.now()-started).toFixed(1)}`} });
   } catch(error) {
     console.error("Match report unavailable:",error instanceof Error?error.name:"Unknown error");

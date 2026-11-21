@@ -13,7 +13,7 @@ const normalize=(row:any):NormalizedEvent=>({id:row.event_idx,teamId:row.team_id
 async function allEvents(gameId:number,profile?:Record<string,number>){
   const cache=globalCache[cacheKey]??(globalCache[cacheKey]=new Map());
   const hit=cache.get(gameId);
-  if(hit&&Date.now()-hit.at<300000){if(profile)profile.cache=0;return hit.events;}
+  if(hit?.events.length&&Date.now()-hit.at<300000){if(profile)profile.cache=0;return hit.events;}
   const dbStarted=performance.now();
   const db=await database();
   if(profile)profile.database=performance.now()-dbStarted;
@@ -22,7 +22,7 @@ async function allEvents(gameId:number,profile?:Record<string,number>){
   if(profile)profile.query=performance.now()-queryStarted;
   const normalizeStarted=performance.now();
   const events=rows.map(normalize);
-  cache.set(gameId,{at:Date.now(),events});
+  if(events.length)cache.set(gameId,{at:Date.now(),events});
   if(profile)profile.normalize=performance.now()-normalizeStarted;
   return events;
 }
@@ -43,7 +43,7 @@ export async function GET(request:Request,{params}:{params:Promise<{matchId:stri
     const maxMinute=events.reduce((max:number,event:NormalizedEvent)=>typeof event.minute==="number"?Math.max(max,event.minute):max,90);
     const body={events:filtered,category,from,to,maxMinute};
     if(profile){profile.filter=performance.now()-filterStarted;const serializationStarted=performance.now();const bytes=JSON.stringify(body).length;profile.serialization=performance.now()-serializationStarted;profile.total=performance.now()-requestStarted;console.info("[spatial-events]",JSON.stringify({gameId,category,from,to,rows:events.length,returned:filtered.length,bytes,timingMs:profile}));}
-    return NextResponse.json(body,{headers:{"Cache-Control":"private, max-age=300"}});
+    return NextResponse.json(body,{headers:{"Cache-Control":events.length?"private, max-age=300":"no-store"}});
   }catch(error){
     console.error("Spatial match events unavailable:",error instanceof Error?error.name:"Unknown error");
     return NextResponse.json({error:"Spatial events are unavailable."},{status:503});

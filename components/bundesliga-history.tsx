@@ -107,10 +107,9 @@ const layoutSameCityClubs = (base: Club[]) => {
 
 type HistoricalPosition = NonNullable<Dashboard["historicalPositions"]>[number];
 
-function HistoricalPositionEvolution({data,primaryId,primaryName,primaryLogo,compareId,onCompareChange}:{data:Dashboard;primaryId:number;primaryName:string;primaryLogo?:string;compareId:number|null;onCompareChange:(id:number|null)=>void}) {
+function HistoricalPositionEvolution({data,seasons,primaryId,primaryName,primaryLogo,compareId,onCompareChange}:{data:Dashboard;seasons:string[];primaryId:number;primaryName:string;primaryLogo?:string;compareId:number|null;onCompareChange:(id:number|null)=>void}) {
   const {t}=useI18n();
   const positions=data.historicalPositions??[];
-  const seasons=[...data.seasons].sort((a,b)=>Number(a.slice(0,4))-Number(b.slice(0,4)));
   const clubs=[...new Map(positions.map(row=>[row.clubId,{id:row.clubId,name:row.clubName,logo:data.logos[row.clubName]}])).values()].sort((a,b)=>a.name.localeCompare(b.name));
   const maxPosition=Math.max(20,...positions.map(row=>row.participants));
   const width=1000,height=365,left=48,right=18,top=24,bottom=54,chartWidth=width-left-right,chartHeight=height-top-bottom;
@@ -175,7 +174,11 @@ function HistoricalPositionEvolution({data,primaryId,primaryName,primaryLogo,com
 export default function BundesligaHistory({ data }: Props) {
   const { t } = useI18n();
   const [geo, setGeo] = useState<GeoJson | null>(null); const [index, setIndex] = useState(0); const [individualIndex, setIndividualIndex] = useState(0); const [allSeasons, setAllSeasons] = useState(false); const [allFromIndex, setAllFromIndex] = useState(0); const [allToIndex, setAllToIndex] = useState(0); const [hoveredState, setHoveredState] = useState<string | null>(null); const [selectedState, setSelectedState] = useState<string | null>(null); const stateLeaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null); const positionDialog = useRef<HTMLDialogElement>(null); const [recordSort, setRecordSort] = useState<HistoricalSortKey>("points"); const [recordDescending, setRecordDescending] = useState(true); const [recordView, setRecordView] = useState<HistoricalRecordView>("overview"); const [recordQuery, setRecordQuery] = useState(""); const [selectedHistoryClub, setSelectedHistoryClub] = useState<number | null>(null); const [comparisonHistoryClub, setComparisonHistoryClub] = useState<number | null>(null);
-  const seasons = useMemo(() => [...data.seasons].sort((a, b) => Number(a.slice(0, 4)) - Number(b.slice(0, 4))), [data.seasons]); const season = seasons[index] ?? data.season;
+  const seasons = useMemo(
+    () => [...new Set((data.historicalPositions ?? []).map(row => row.season))].sort(),
+    [data.historicalPositions],
+  );
+  const season = seasons[index] ?? seasons.at(-1) ?? "";
   useEffect(() => { fetch("/history-vg1000.json").then(r => r.json()).then(setGeo).catch(() => setGeo(null)); }, []);
   useEffect(() => { if (!seasons.length) return; const latest = seasons.length - 1; setIndex(latest); setIndividualIndex(latest); setAllFromIndex(0); setAllToIndex(latest); }, [seasons.length]);
   useEffect(() => {
@@ -426,7 +429,7 @@ export default function BundesligaHistory({ data }: Props) {
         <span className="eyebrow">{t("dash.historicalLeaguePosition")}</span>
         <button type="button" className="icon-button" onClick={() => { setSelectedHistoryClub(null); setComparisonHistoryClub(null); }} aria-label={t("ui.close")}><X size={19}/></button>
       </div>
-      <HistoricalPositionEvolution data={data} primaryId={selected.id} primaryName={selected.name} primaryLogo={selected.logo} compareId={comparisonHistoryClub} onCompareChange={setComparisonHistoryClub}/>
+      <HistoricalPositionEvolution data={data} seasons={seasons} primaryId={selected.id} primaryName={selected.name} primaryLogo={selected.logo} compareId={comparisonHistoryClub} onCompareChange={setComparisonHistoryClub}/>
     </dialog> : null; })()}
     <footer className="history-source">{`${t("dash.boundarySource")}, EPSG:25832, downloaded from the official BKG WFS. ${t("dash.clubLocationsPending")}${unresolved.length ? ` \u2014 unresolved: ${unresolved.map(entry => entry.name).join(", ")}` : ""}.`}</footer>
   </main>;
