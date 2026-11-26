@@ -20,6 +20,7 @@ export type PassingNetworkEdge = {
   count: number;
   confirmed: number;
   estimated: number;
+  sharedMinutes?: number;
 };
 
 export type ResolvedPassAction = { from:number; to:number; fromX?:number; fromY?:number; toX?:number; toY?:number; confirmed:boolean };
@@ -42,7 +43,7 @@ const seconds = (event: NetworkEvent) =>
  * Resolves only conservative next-action relationships. The source data has no
  * recipient field, so inferred edges are intentionally marked estimated. Explicit source recipients, when present, are marked confirmed.
  */
-export function buildPassingNetwork(events: NetworkEvent[], teamId: number): PassingNetworkResult {
+export function buildPassingNetwork(events: NetworkEvent[], teamId: number, accepts?: (pass:NetworkEvent,recipient:NetworkEvent)=>boolean): PassingNetworkResult {
   const ordered = [...events].sort((a, b) => a.id - b.id);
   const passes = ordered.filter(
     event => event.teamId === teamId && event.category === "passing" &&
@@ -76,7 +77,7 @@ export function buildPassingNetwork(events: NetworkEvent[], teamId: number): Pas
       }
       if (dt > 5) break;
     }
-    if (!recipient) continue;
+    if (!recipient || (accepts&&!accepts(pass,recipient))) continue;
     resolvedCompleted++;
     const recipientX = valid(recipient.x) ? recipient.x : pass.endX;
     const recipientY = valid(recipient.y) ? recipient.y : pass.endY;

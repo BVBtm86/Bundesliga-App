@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { database } from "@/lib/mongo";
 import { standings } from "@/lib/analytics";
-import { PERIODS } from "@/lib/filters";
+import { importedTeamStatsProjection, normalizeImportedTeamStats, type ImportedTeamStats } from "@/lib/imported-team-statistics";
 import { buildHistoricalPositions } from "@/lib/historical-positions";
-import type { Match, MatchStats, MatchPeriod, MatchStatus, PeriodStats, SeasonConfig, SeasonOutcomeClassification } from "@/lib/types";
+import type { Match, MatchStatus, SeasonConfig, SeasonOutcomeClassification } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -21,8 +21,9 @@ const matchStatus = (value: unknown): MatchStatus => {
 export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const requested = params.get("season");
+  const teamAnalysis = params.get("teamAnalysis") === "1";
   const includeHistory = params.get("includeHistory") === "1";
-  if (requested && !/^\d{4}-\d{4}$/.test(requested))
+  if (!teamAnalysis && requested && !/^\d{4}-\d{4}$/.test(requested))
     return NextResponse.json({error:"Choose a valid season."},{status:400});
   try {
     const db = await database();
@@ -35,15 +36,44 @@ export async function GET(request: Request) {
       .filter((s): s is string => typeof s === "string" && /^\d{4}-\d{4}$/.test(s)).sort().reverse();
     if (!seasons.length)
       return NextResponse.json({error:"No Bundesliga schedule data has been imported yet. Refresh after the import reaches game_schedule."},{status:404});
-    const season = requested ?? seasons[0];
-    if (!seasons.includes(season))
+    let teamAnalysisSeasons: string[] | undefined;
+    let teamAnalysisMatchdays: Record<number,Record<string,number>>|undefined;
+    if (teamAnalysis) {
+      const fixtures = await db.collection("game_schedule").find({
+        ...filter,
+        season: { $in: seasons.filter(value => value >= "2009-2010") },
+        game_status: "finished",
+        game_id: { $type: "number" }
+      }, { projection: { _id: 0, game_id: 1, season: 1, week: 1, home_team_id: 1, away_team_id: 1 } }).toArray();
+      const coveredGameIds = new Set(await db.collection("game_team_stats_app").distinct("game_id", {
+        game_id: { $in: fixtures.map(fixture => fixture.game_id) },
+        "stats.ft": { $type: "object" }
+      }));
+      teamAnalysisSeasons = [...new Set<string>(fixtures
+        .filter(fixture => coveredGameIds.has(fixture.game_id))
+        .map(fixture => fixture.season))].sort().reverse();
+      const available=new Set(teamAnalysisSeasons);
+      teamAnalysisMatchdays={};
+      for(const fixture of fixtures){
+        if(!available.has(fixture.season)||!Number.isInteger(fixture.week)||fixture.week<1||fixture.week>34)continue;
+        for(const teamId of [fixture.home_team_id,fixture.away_team_id]){
+          if(!Number.isInteger(teamId))continue;
+          const matchdays=teamAnalysisMatchdays[teamId]??={};
+          matchdays[fixture.season]=Math.max(matchdays[fixture.season]??0,fixture.week);
+        }
+      }
+    }
+
+    const season = requested ?? (teamAnalysisSeasons ?? seasons)[0] ?? "";
+    const selectedSeason = teamAnalysisSeasons && !teamAnalysisSeasons.includes(season) ? "" : season;
+    if (!teamAnalysis && !seasons.includes(season))
       return NextResponse.json({error:"This season has no imported schedule."},{status:404});
     const scheduleProjection = {
       _id:0,game_id:1,season:1,game_date:1,week:1,home_team_id:1,away_team_id:1,
       home_team_name:1,away_team_name:1,home_goals:1,away_goals:1,game_status:1,venue:1,attendance:1
     };
     const [schedule, historicalSchedule, historicalResults, availableTeams, seasonConfigRows] = await Promise.all([
-      db.collection("game_schedule").find({...filter,season}, {projection:{
+      db.collection("game_schedule").find({...filter,season:selectedSeason}, {projection:{
         _id:0,game_id:1,season:1,game_date:1,week:1,home_team_id:1,away_team_id:1,
         home_team_name:1,away_team_name:1,home_goals:1,away_goals:1,game_status:1,venue:1,attendance:1
       }}).limit(1000).toArray(),
@@ -53,10 +83,8 @@ export async function GET(request: Request) {
       db.collection("season_config").find({season:{$in:seasons}},{projection:{_id:0,competition:1,season:1,start_year:1,end_year:1,team_count:1,teams:1,matchdays:1,rules:1,points:1,standings_tiebreakers:1,standingsTiebreakers:1,data_availability:1,dataAvailability:1,summary:1,outcomes:1,classifications:1,champion_team_id:1,championTeamId:1,relegated_team_ids:1,relegatedTeamIds:1,promoted_team_ids:1,promotedTeamIds:1}}).toArray().catch(() => [] as any[])
     ]);
     const scheduleGameIds = schedule.map((row: any) => row.game_id).filter((id: unknown): id is number => typeof id === "number");
-    const rows = scheduleGameIds.length ? await db.collection("game_team_stats_app").find({game_id:{$in:scheduleGameIds}}, {projection:Object.fromEntries([
-      ["_id",0],["game_id",1],["team_id",1],
-      ...PERIODS.flatMap(p=>["goals","own_goals","shots","shot_on_target","shot_off_target","shot_blocked","shot_woodwork","shot_zone_inside_box","shot_zone_outside_box","shot_set_piece","shot_fastbreak","shot_open_play","shot_penalty","possession","touches","loss_of_possession","dispossessed","turnover","pass_attempt","pass_completed","pass_completion_pct","pass_key_pass","pass_assist","pass_through_ball","pass_forward","pass_backward","pass_cross","pass_cross_completed","pass_cross_completion_pct","pass_corner","pass_long","pass_long_completed","pass_long_completion_pct","pass_final_third","pass_final_third_completed","pass_final_third_completion_pct","tackles_attempted","tackle_gained_possession","tackle_success_pct","interceptions","clearances","blocks","blocked_shot","errors","ball_recoveries","dribbles","dribble_successful","offsides","foul_suffered","foul_committed","aerial_duels","aerial_duel_won","saves","goalkeeper_actions","claims","punches","keeper_pickup","keeper_sweeper","cards","yellow_card","second_yellow_card","red_card","shot_accuracy","goal_conversion_pct"].map(key=>["stats."+p.value+"."+key,1]))
-    ])}).limit(2000).toArray() : [];
+    const rows = scheduleGameIds.length ? await db.collection<ImportedTeamStats>("game_team_stats_app")
+      .find({game_id:{$in:scheduleGameIds}}, {projection:importedTeamStatsProjection()}).limit(2000).toArray() : [];
     const goalRows = await db.collection("game_key_events").find({game_id:{$in:schedule.filter(d=>typeof d.game_id === "number").map(d=>d.game_id)},event_type:"goal"},{projection:{_id:0,game_id:1,team_id:1,player_name:1,minute:1,added_time:1,event_subtype:1}}).sort({minute:1}).toArray();
     const teamMeta = new Map(availableTeams.filter(d=>typeof d.ws_team_id === "number").map(d=>[d.ws_team_id,d]));
     const teamMetaByName = new Map<string, any>();
@@ -95,23 +123,16 @@ export async function GET(request: Request) {
         status: d.cancelled === true ? "cancelled" : "finished", venue: teamMeta.get(d.home_team_id)?.stadium_name ?? "", attendance: null, historical: true
       };
     };
-    const selectedHistorical = historicalResults.filter(d => d.season === season).map((d, index) => mapHistoricalMatch(d, index));
+    const selectedHistorical = teamAnalysis ? [] : historicalResults.filter(d => d.season === season).map((d, index) => mapHistoricalMatch(d, index));
     const matches: Match[] = [...new Map([...schedule.filter(d => typeof d.game_id === "number").map(d => {
       const m=mapMatch(d); return [m.id,m] as const;
     }), ...selectedHistorical.map(m => [m.id,m] as const)]).values()].sort((a,b) => b.date.localeCompare(a.date) || b.id-a.id);
     const historicalMatches: Match[] = [...new Map([...historicalSchedule.filter(d=>typeof d.game_id === "number").map(d=>{
       const m=mapMatch(d); return [m.id,m] as const;
     }), ...historicalResults.map((d, index) => { const m=mapHistoricalMatch(d, index); return [m.id,m] as const; } )]).values()].sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);
-    const stats: MatchStats[] = [...new Map(rows.map(d => {
-      const periods:Partial<Record<MatchPeriod,PeriodStats>>={};
-      for(const p of PERIODS) {
-        const raw=d.stats?.[p.value];
-        if(!raw)continue;
-        periods[p.value]={goals:number(raw.goals),ownGoals:number(raw.own_goals),shots:number(raw.shots),shotsOffTarget:number(raw.shot_off_target),blockedShots:number(raw.shot_blocked),woodwork:number(raw.shot_woodwork),onTarget:number(raw.shot_on_target),insideBoxShots:number(raw.shot_zone_inside_box),outsideBoxShots:number(raw.shot_zone_outside_box),setPieceShots:number(raw.shot_set_piece),fastbreakShots:number(raw.shot_fastbreak),openPlayShots:number(raw.shot_open_play),penaltyShots:number(raw.shot_penalty),possession:number(raw.possession),touches:number(raw.touches),lossOfPossession:number(raw.loss_of_possession),dispossessed:number(raw.dispossessed),turnovers:number(raw.turnover),passes:number(raw.pass_attempt),completedPasses:number(raw.pass_completed),passCompletion:number(raw.pass_completion_pct),keyPasses:number(raw.pass_key_pass),assists:number(raw.pass_assist),throughBalls:number(raw.pass_through_ball),forwardPasses:number(raw.pass_forward),backwardPasses:number(raw.pass_backward),crosses:number(raw.pass_cross),completedCrosses:number(raw.pass_cross_completed),crossCompletion:number(raw.pass_cross_completion_pct),longPasses:number(raw.pass_long),completedLongPasses:number(raw.pass_long_completed),longPassAccuracy:number(raw.pass_long_completion_pct),finalThirdPasses:number(raw.pass_final_third),completedFinalThirdPasses:number(raw.pass_final_third_completed),finalThirdCompletion:number(raw.pass_final_third_completion_pct),corners:number(raw.pass_corner),tackles:number(raw.tackles_attempted),successfulTackles:number(raw.tackle_gained_possession),tackleSuccess:number(raw.tackle_success_pct),interceptions:number(raw.interceptions),clearances:number(raw.clearances),blocks:number(raw.blocks),blockedShot:number(raw.blocked_shot),errors:number(raw.errors),recoveries:number(raw.ball_recoveries),dribbles:number(raw.dribbles),successfulDribbles:number(raw.dribble_successful),offsides:number(raw.offsides),foulsWon:number(raw.foul_suffered),foulsCommitted:number(raw.foul_committed),aerialDuels:number(raw.aerial_duels),aerialDuelsWon:number(raw.aerial_duel_won),saves:number(raw.saves),goalkeeperActions:number(raw.goalkeeper_actions),claims:number(raw.claims),punches:number(raw.punches),keeperPickup:number(raw.keeper_pickup),keeperSweeper:number(raw.keeper_sweeper),yellowCards:number(raw.cards ?? raw.yellow_card),secondYellowCards:number(raw.second_yellow_card),foulsSuffered:number(raw.foul_suffered),redCards:number(raw.red_card),shotAccuracy:number(raw.shot_accuracy),goalConversion:number(raw.goal_conversion_pct)};
-      }
-      const ft=periods.ft;
-      const row: MatchStats={...ft,gameId:d.game_id,teamId:d.team_id,shots:ft?.shots??null,onTarget:ft?.onTarget??null,possession:ft?.possession??null,passes:ft?.passes??null,passCompletion:ft?.passCompletion??null,periods};
-      return [row.gameId+":"+row.teamId,row] as const;
+    const stats = [...new Map(rows.map(document => {
+      const row = normalizeImportedTeamStats(document);
+      return [row.gameId + ":" + row.teamId, row] as const;
     })).values()];
     const logos: Record<string,string> = {};
     const fullTeamNames: Record<string,string> = {};
@@ -198,7 +219,7 @@ export async function GET(request: Request) {
     const selectedConfig = seasonConfigs.find(config => config.season === season);
     const selectedPointsForWin = selectedConfig?.rules?.pointsForWin ?? 3;
     const selectedPointsForDraw = selectedConfig?.rules?.pointsForDraw ?? 1;
-    return NextResponse.json({seasons,season,matches,teams:standings(matches, "all", [], selectedPointsForWin, selectedConfig?.standingsTiebreakers, selectedPointsForDraw, selectedConfig),stats,historicalMatches,historicalPositions,logos,fullTeamNames,shortTeamNames,stadiums,teamLocations,seasonConfigs,goalscorers,fetchedAt:new Date().toISOString()},
+    return NextResponse.json({seasons,teamAnalysisSeasons,teamAnalysisMatchdays,season:selectedSeason,matches,teams:standings(matches, "all", [], selectedPointsForWin, selectedConfig?.standingsTiebreakers, selectedPointsForDraw, selectedConfig),stats,historicalMatches,historicalPositions,logos,fullTeamNames,shortTeamNames,stadiums,teamLocations,seasonConfigs,goalscorers,fetchedAt:new Date().toISOString()},
       {headers:{"Cache-Control":"private, no-store"}});
   } catch (error) {
     console.error("Dashboard data unavailable:", error instanceof Error ? error.name : "Unknown error");

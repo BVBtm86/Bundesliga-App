@@ -46,3 +46,34 @@ export function fixturesForMode(matches:Match[],mode:FixtureMode):Match[] {
 export function defaultMatchday(matches:Match[],mode:FixtureMode):number|null {
   return fixturesForMode(matches,mode).find(m=>m.week>0)?.week??null;
 }
+
+export function canPreviewFixture(fixture: Match, matches: readonly Match[]): boolean {
+  if (fixture.finished || fixture.historical || fixture.status !== "scheduled") return false;
+
+  return [fixture.homeId, fixture.awayId].every(teamId => {
+    let previous: Match | undefined;
+    for (const match of matches) {
+      if (match.id === fixture.id || match.status === "cancelled") continue;
+      if (match.homeId !== teamId && match.awayId !== teamId) continue;
+
+      const isEarlier = fixture.date && match.date
+        ? match.date < fixture.date
+        : match.week > 0 && match.week < fixture.week;
+      if (!isEarlier) continue;
+
+      const isMoreRecent = !previous || (fixture.date && match.date && previous.date
+        ? match.date > previous.date
+        : match.week > previous.week);
+      if (isMoreRecent) previous = match;
+    }
+    return previous?.finished === true;
+  });
+}
+
+export function latestMatchdayWithResults(matches: readonly Match[]): number | null {
+  const latest = matches.reduce((week, match) =>
+    match.finished && match.homeGoals != null && match.awayGoals != null
+      ? Math.max(week, match.week)
+      : week, 0);
+  return latest || null;
+}

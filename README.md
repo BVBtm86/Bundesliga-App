@@ -90,3 +90,42 @@ Upcoming and results: importing the full schedule retains unplayed fixtures. The
 
 
 Pages now have their own URLs: /overview, /upcoming, /results, /standings, /teams and /goals. Upcoming is available only when the selected season contains unfinished fixtures; archived-season visits fall back to Results. Results opens on the latest completed matchday. Standings has independent inclusive matchday-range filters, combined with season phase, venue and period filters, and shows all season clubs unless a club search is entered. Navigation retains the selected season and shared filters.
+
+## Tactical DNA descriptive analytics
+
+The first implementation serves passing summaries from the derived
+`game_tactical_dna_app` collection. Match records are keyed by fixture and
+calculation version and retain separate team/opponent contributions for full
+matches and each half. The [feature registry](lib/tactical-dna.ts) documents each
+metric's source fields, units, formula, version, and coverage rule. A paired
+ratio uses only matches where both source counts are recorded. Its denominator
+is the sum of attempts, and a zero denominator returns an unavailable value.
+
+With Python 3.11 or newer, set up and run the local read service from the app
+root. The Next.js route connects to port 8000 by default. Set
+`TACTICAL_DNA_API_ORIGIN` in the Next.js environment if using another address.
+
+```sh
+python3 -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+.venv/bin/python -m uvicorn --app-dir backend tactical_dna_api:app --host 127.0.0.1 --port 8000
+```
+
+Both the service and the builder use `MONGODB_URI` and `MONGODB_DB`, with the
+same local defaults as the dashboard. Run the builder after finished matches
+are imported. Its default is a dry run. `--write` writes to the Tactical DNA
+collection. Re-run an individual fixture with `--match=<game_id>` after late
+or corrected source statistics arrive.
+
+```sh
+node --env-file-if-exists=.env.local --import tsx scripts/build-tactical-dna.ts --write
+node --env-file-if-exists=.env.local --import tsx scripts/build-tactical-dna.ts --write --match=1910902
+node --import tsx --test lib/tactical-dna.test.ts
+node --import tsx scripts/check-tactical-dna.ts
+node scripts/check-tactical-dna-api.mjs
+```
+
+`GET /tactical-dna/seasons` returns materialized coverage. The metrics endpoint,
+`GET /tactical-dna/metrics`, accepts `season`, `start`, `end`, `period`,
+`venue`, and `side`. It returns match counts for the scope and for each
+reported metric. The last season may be in progress.

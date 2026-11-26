@@ -1,7 +1,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { seasonSubset, scoresForPeriod, statsForPeriod, teamVenueMatches } from "./filters";
+import { canPreviewFixture, latestMatchdayWithResults, seasonSubset, scoresForPeriod, statsForPeriod, teamVenueMatches } from "./filters";
 import { completed, standings, goalSummary, goalTrend } from "./analytics";
 import type { Match, MatchStats, PeriodStats } from "./types";
 const match=(extra:Partial<Match>={}):Match=>({id:1,date:"2024-01-01",week:1,homeId:1,awayId:2,home:"A",away:"B",homeGoals:3,awayGoals:2,finished:true,venue:"Arena",attendance:0,...extra});
@@ -11,6 +11,19 @@ test("season halves split at matchdays 17 and 18 without overlap",()=>{
  const games=[match({week:0}),match({week:1}),match({week:17}),match({week:18}),match({week:34})];
  assert.deepEqual(seasonSubset(games,"first").map(m=>m.week),[1,17]);
  assert.deepEqual(seasonSubset(games,"second").map(m=>m.week),[18,34]);
+});
+test("latest matchday with results includes partially completed rounds", () => {
+ const games = [
+  match({week: 0}),
+  match({week: 9}),
+  match({week: 10}),
+  match({week: 10, finished: false}),
+  match({week: 11, finished: false}),
+  match({week: 12, homeGoals: null}),
+ ];
+ assert.equal(latestMatchdayWithResults(games), 10);
+ assert.equal(latestMatchdayWithResults([match({week: 34})]), 34);
+ assert.equal(latestMatchdayWithResults([match({week: 1, finished: false})]), null);
 });
 test("period scores preserve zero and never reuse full-time goals",()=>{
  const games=scoresForPeriod([match()],[stats(1,0),stats(2,1)],"fh");
@@ -63,4 +76,15 @@ test("upcoming and results default to the next and latest fixture dates",async()
  assert.deepEqual(fixturesForMode(games,"results").map(m=>m.id),[1,2]);
  assert.equal(defaultMatchday(games.filter(m=>m.finished),"upcoming"),null);
  assert.equal(defaultMatchday([],"results"),null);
+});
+
+test("scheduled preview unlocks when both clubs finish their previous fixture",()=>{
+ const homePrevious=match({id:10,week:10,date:"2026-11-21",homeId:1,awayId:3});
+ const awayPrevious=match({id:11,week:10,date:"2026-11-22",homeId:4,awayId:2});
+ const fixture=match({id:12,week:11,date:"2026-11-28",finished:false,status:"scheduled"});
+ const unrelated=match({id:13,week:10,date:"2026-11-22",homeId:5,awayId:6,finished:false,status:"scheduled"});
+ assert.equal(canPreviewFixture(fixture,[homePrevious,awayPrevious,fixture,unrelated]),true);
+ assert.equal(canPreviewFixture(fixture,[homePrevious,{...awayPrevious,finished:false},fixture]),false);
+ assert.equal(canPreviewFixture(fixture,[homePrevious,fixture]),false);
+ assert.equal(canPreviewFixture({...fixture,week:12,date:"2026-12-05",id:14},[homePrevious,awayPrevious,fixture]),false);
 });

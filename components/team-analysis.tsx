@@ -1,20 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import {usePathname,useRouter} from "next/navigation";
+import { Activity, useMemo, useState } from "react";
 import { ArrowLeft, ArrowLeftRight, BarChart3, CalendarDays, ChevronRight, Flag, Hand, Shield, Swords, Target, TrendingDown, TrendingUp, Trophy } from "lucide-react";
 import { useI18n } from "@/lib/i18n";
-import { standings } from "@/lib/analytics";
+import { completed, standings } from "@/lib/analytics";
 import type { Dashboard, Match, MatchPeriod, MatchStats, VenueFilter } from "@/lib/types";
-import TeamAnalysisScatter from "./team-analysis-scatter";
 import TeamAnalysisStatisticalPerformance from "./team-analysis-statistical-performance";
 import TeamAnalysisSeasonTrend from "./team-analysis-season-trend";
-import TeamAnalysisTacticalDNA from "./team-analysis-tactical-dna";
 import InsightsPlaceholder from "./insights-placeholder";
-import { ForecastFoundation, SeasonEvolution, StrengthsWeaknesses, TacticalDNAWorkspace, TeamComparisons } from "./team-analysis-advanced";
+import { ForecastFoundation } from "./team-analysis-advanced";
+import { SeasonEvolutionWorkspace, TeamComparisonWorkspace } from "./team-season-workspaces";
 import type { TeamAnalysisCategory } from "./team-analysis-metrics";
 
-type Tab = "overview" | "performance" | "tactical" | "strengths" | "comparisons" | "seasonEvolution" | "forecast";
-type Props = { data: Dashboard; teamId: number; season: string; onSeasonChange: (season: string) => void; onBack: () => void };
+type Tab = "overview" | "performance" | "comparisons" | "seasonEvolution" | "forecast";
+type Props = { data: Dashboard; teamId: number; season: string; pending: boolean; onSeasonChange: (season: string) => void; onBack: () => void };
 const localeMap = { en: "en-GB", de: "de-DE", es: "es-ES", ro: "ro-RO" } as const;
 const formatDate = (value: string, locale: keyof typeof localeMap) => new Intl.DateTimeFormat(localeMap[locale], { day: "numeric", month: "short", year: "numeric", timeZone: "Europe/Berlin" }).format(new Date(value));
 const valueOrDash = (value: number | null | undefined, digits = 0) => typeof value === "number" && Number.isFinite(value) ? value.toFixed(digits) : "—";
@@ -24,22 +24,35 @@ function Crest({ name, data }: { name: string; data: Dashboard }) {
   return <span className="team-analysis-crest">{src ? <img src={src} alt="" /> : <span>{name.split(/\s+/).map(part => part[0]).join("").slice(0, 3)}</span>}</span>;
 }
 
-function EmptyState({ text }: { text: string }) { return <div className="team-analysis-empty"><BarChart3 size={23} /><p>{text}</p></div>; }
+function EmptyState({ text }: { text: string }) { return <div className="team-analysis-empty" role="status"><BarChart3 size={23} /><p>{text}</p></div>; }
 
-export default function TeamAnalysis({ data, teamId, season, onSeasonChange, onBack }: Props) {
+export default function TeamAnalysis({ data, teamId, season, pending, onSeasonChange, onBack }: Props) {
   const { t, locale } = useI18n();
-  const [tab, setTab] = useState<Tab>("overview");
+  const pathname=usePathname(),router=useRouter();
+  const routedEvolution=/\/(season-evolution|season-statistics|statistical-evolution)$/.test(pathname);
+  const [selectedTab,setSelectedTab]=useState<Tab>("overview");
+  const tab=routedEvolution?"seasonEvolution":selectedTab;
+  const setTab=(next:Tab)=>{setSelectedTab(next);if(next==="seasonEvolution")router.push(`/teams/${teamId}/season-evolution${window.location.search}`);else if(routedEvolution)router.push(`/teams/${teamId}${window.location.search}`);};
+  const [comparisonView,setComparisonView]=useState<"stats"|"spatial"|"tactical">("stats");
   const [performanceFrom, setPerformanceFrom] = useState(1);
-  const [performanceTo, setPerformanceTo] = useState(34);
+  const [performanceTo, setPerformanceTo] = useState<number>();
   const [performanceVenue, setPerformanceVenue] = useState<VenueFilter>("all");
   const [performancePeriod, setPerformancePeriod] = useState<MatchPeriod>("ft");
   const [performanceCategory, setPerformanceCategory] = useState<TeamAnalysisCategory>("attacking");
   const team = data.teams.find(entry => entry.id === teamId);
   const teamMatches = useMemo(() => data.matches.filter(match => match.finished && match.homeGoals !== null && match.awayGoals !== null && (match.homeId === teamId || match.awayId === teamId)).sort((a, b) => b.date.localeCompare(a.date)), [data.matches, teamId]);
+  const seasons = data.teamAnalysisSeasons ?? [];
+  const evolutionSeason = (Object.keys(data.teamAnalysisMatchdays?.[teamId] ?? {}).sort().at(-1) ?? [...seasons].sort().at(-1)) ?? season;
+  const supportedSeason = seasons.includes(season);
+  const matchIds = new Set(teamMatches.map(match => match.id));
+  const hasTeamStatistics = data.stats.some(row =>
+    row.teamId === teamId && matchIds.has(row.gameId) &&
+    Object.values(row.periods ?? {}).some(period => Object.values(period).some(Number.isFinite))
+  );
   const seasonConfig = data.seasonConfigs?.find(config => config.season === data.season);
   const table = useMemo(() => standings(data.matches.filter(match => match.finished), "all", data.matches, seasonConfig?.rules?.pointsForWin ?? 3, seasonConfig?.standingsTiebreakers, seasonConfig?.rules?.pointsForDraw ?? 1, seasonConfig), [data, seasonConfig]);
   const standing = table.find(entry => entry.id === teamId);
-  const name = team?.name ?? (teamMatches[0]?.homeId === teamId ? teamMatches[0]?.home : teamMatches[0]?.away) ?? t("teamAnalysis.team");
+  const name = team?.name ?? (teamMatches[0]?.homeId === teamId ? teamMatches[0]?.home : teamMatches[0]?.away) ?? data.teamLocations?.find(entry => entry.id === teamId)?.name ?? t("teamAnalysis.team");
   const fullName = data.fullTeamNames?.[name] ?? name;
   const ft = (row: MatchStats | undefined) => row?.periods?.ft;
   const statByGameTeam = useMemo(() => new Map(data.stats.map(row => [`${row.gameId}:${row.teamId}`, row])), [data.stats]);
@@ -74,9 +87,10 @@ export default function TeamAnalysis({ data, teamId, season, onSeasonChange, onB
     for (const match of teamMatches) { const current = groups.get(match.week) ?? { scored: 0, conceded: 0, matches: [] }; const home = match.homeId === teamId; current.scored += home ? match.homeGoals! : match.awayGoals!; current.conceded += home ? match.awayGoals! : match.homeGoals!; current.matches.push(match); groups.set(match.week, current); }
     return [...groups.entries()].sort((a, b) => a[0] - b[0]).slice(-10);
   }, [teamMatches, teamId]);
-  const performanceMaxWeek = Math.max(1, ...data.matches.map(match => match.week || 0));
-  const performanceFilters = { from: performanceFrom, to: Math.min(performanceTo, performanceMaxWeek), venue: performanceVenue, period: performancePeriod };
-  const tabs: Array<[Tab, string]> = [["overview", t("teamAnalysis.overview")], ["performance", t("teamAnalysis.performance")], ["tactical", t("teamAnalysis.tactical")], ["strengths", t("teamAnalysis.strengths")], ["comparisons", t("teamAnalysis.comparisons")], ["seasonEvolution", t("teamAnalysis.seasonEvolution")], ["forecast", t("teamAnalysis.forecast")]];
+  const performanceLatestWeek = Math.max(0, ...completed(data.matches).map(match => match.week || 0));
+  const performanceMaxWeek = Math.max(1, performanceLatestWeek);
+  const performanceFilters = { from: Math.min(performanceFrom, performanceMaxWeek), to: Math.min(performanceTo ?? performanceMaxWeek, performanceMaxWeek), venue: performanceVenue, period: performancePeriod };
+  const tabs: Array<[Tab, string]> = [["overview", t("teamAnalysis.overview")], ["performance", t("teamAnalysis.performance")], ["comparisons", t("teamAnalysis.comparisons")], ["seasonEvolution", t("teamAnalysis.seasonEvolution")], ["forecast", t("teamAnalysis.forecast")]];
   const recent = teamMatches.slice(0, 5);
   const summaryRows: Array<[string, string, number | null, number]> = [
     [t("teamAnalysis.goalsPerMatch"), valueOrDash(aggregate.goalsFor, 2), aggregate.goalsFor, 5],
@@ -125,19 +139,20 @@ export default function TeamAnalysis({ data, teamId, season, onSeasonChange, onB
   const resultFor = (match: Match) => { const home = match.homeId === teamId; const scored = home ? match.homeGoals! : match.awayGoals!; const conceded = home ? match.awayGoals! : match.homeGoals!; return { scored, conceded, result: scored > conceded ? "W" : scored === conceded ? "D" : "L", opponent: home ? match.away : match.home }; };
   return <section className="team-analysis-workspace">
     <button className="team-analysis-back" type="button" onClick={onBack}><ArrowLeft size={15} /> {t("teamAnalysis.backToTeams")}</button>
-    <div className="team-analysis-header"><div className="team-analysis-identity"><Crest name={name} data={data} /><div><span className="eyebrow">{t("global.germany")} · {t("global.bundesliga")}</span><h1>{fullName}</h1><p>{t("teamAnalysis.selectedSeason")} · {season.replace("-", " / ")}</p></div></div><div className="team-analysis-filters"><label className="team-analysis-season"><span>{t("teamAnalysis.season")}</span><span className="season-selector"><CalendarDays size={15}/><select value={season} onChange={event => onSeasonChange(event.target.value)}>{data.seasons.map(option => <option key={option} value={option}>{option.replace("-", " / ")}</option>)}</select></span></label></div></div>
+    <div className="team-analysis-header"><div className="team-analysis-identity"><Crest name={name} data={data} /><div><span className="eyebrow">{t("global.germany")} · {t("global.bundesliga")}</span><h1>{fullName}</h1><p>{tab==="seasonEvolution"?"Latest season":t("teamAnalysis.selectedSeason")} · {(tab==="seasonEvolution"?evolutionSeason:season).replace("-", "/")}</p></div></div>{tab!=="seasonEvolution"&&<div className="team-analysis-filters"><label className="team-analysis-season"><span>{t("teamAnalysis.season")}</span><span className="season-selector"><CalendarDays size={15}/><select value={supportedSeason ? season : ""} disabled={!seasons.length} onChange={event => onSeasonChange(event.target.value)}>{!supportedSeason && <option value="" hidden disabled>{t("teamAnalysis.unavailableSeason")}</option>}{seasons.map(option => <option key={option} value={option}>{option.replace("-", "/")}</option>)}</select></span></label></div>}</div>
     <nav className="team-analysis-tabs" role="tablist" aria-label={t("teamAnalysis.tabsLabel")}>{tabs.map(([id, label]) => <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}</nav>
+    {pending ? <EmptyState text={t("teamAnalysis.loadingSeason")} /> :
+      !supportedSeason || !hasTeamStatistics ? <EmptyState text={t("teamAnalysis.noSeasonStatistics")} /> : <>
     {tab === "overview" && <div className="team-analysis-overview">
       <div className="team-analysis-kpis">{[[t("teamAnalysis.leaguePosition"), standing ? String(table.indexOf(standing) + 1) : "—"], [t("teamAnalysis.points"), standing ? String(standing.points) : "—"], [t("teamAnalysis.matchesPlayed"), standing ? String(standing.played) : "—"], [t("teamAnalysis.record"), standing ? `${standing.won}–${standing.drawn}–${standing.lost}` : "—"], [t("teamAnalysis.goalsScored"), standing ? String(standing.gf) : "—"], [t("teamAnalysis.goalsConceded"), standing ? String(standing.ga) : "—"], [t("teamAnalysis.goalDifference"), standing ? `${standing.gf - standing.ga > 0 ? "+" : ""}${standing.gf - standing.ga}` : "—"]].map(([label, value]) => <div className="team-analysis-kpi" key={label}><span>{label}</span><strong>{value}</strong></div>)}</div>
       <div className="team-analysis-performance-cards"><section className="panel team-analysis-performance-card for-card"><div className="panel-heading"><div><h2>{t("teamAnalysis.for")} <TrendingUp size={21} aria-hidden="true" /></h2><p>{t("teamAnalysis.seasonAveragesNote")}</p></div></div><div className="team-analysis-metric-list">{performanceCards(false).map(item => <div key={item.metric}><span>{item.label}</span><strong>{item.value === null ? "—" : item.metric === "possession" ? `${item.value.toFixed(1)}%` : item.value.toFixed(2)} </strong><i><b style={{ width: `${item.percentage ?? 0}%` }} /></i></div>)}</div></section><section className="panel team-analysis-performance-card against-card"><div className="panel-heading"><div><h2>{t("teamAnalysis.against")} <TrendingDown size={21} aria-hidden="true" /></h2><p>{t("teamAnalysis.seasonAveragesNote")}</p></div></div><div className="team-analysis-metric-list">{performanceCards(true).map(item => <div key={item.metric}><span>{item.label}</span><strong>{item.value === null ? "—" : item.metric === "possession" ? `${item.value.toFixed(1)}%` : item.value.toFixed(2)} </strong><i><b style={{ width: `${item.percentage ?? 0}%` }} /></i></div>)}</div></section></div>
       <InsightsPlaceholder insightType="team-analysis" description="Future analysis of tactical identity, strengths, weaknesses and performance evolution." />
     </div>}
-    {tab === "performance" && <section className="team-analysis-tab-content"><div className="team-analysis-shared-filters"><label><span>{t("filters.fromMatchday")}</span><select value={performanceFrom} onChange={event=>setPerformanceFrom(Number(event.target.value))}>{Array.from({length:performanceMaxWeek},(_,index)=><option key={index+1} value={index+1}>{index+1}</option>)}</select></label><label><span>{t("filters.toMatchday")}</span><select value={performanceFilters.to} onChange={event=>setPerformanceTo(Number(event.target.value))}>{Array.from({length:performanceMaxWeek},(_,index)=><option key={index+1} value={index+1}>{index+1}</option>)}</select></label><label><span>{t("filters.venue")}</span><select value={performanceVenue} onChange={event=>setPerformanceVenue(event.target.value as VenueFilter)}><option value="all">{t("filters.allVenues")}</option><option value="home">{t("filters.home")}</option><option value="away">{t("filters.away")}</option></select></label><label><span>{t("filters.matchPeriod")}</span><select value={performancePeriod} onChange={event=>setPerformancePeriod(event.target.value as MatchPeriod)}><optgroup label={t("teamAnalysis.matchPeriodGroup")}><option value="ft">{t("ui.fullMatch")}</option><option value="fh">{t("ui.firstHalf")}</option><option value="sh">{t("ui.secondHalf")}</option></optgroup><optgroup label={t("teamAnalysis.minutePeriodsGroup")}>{(["m_1_15","m_16_30","m_31_45","m_46_60","m_61_75","m_76_90","m_1_30","m_31_60","m_61_90"] as MatchPeriod[]).map(period=><option key={period} value={period}>{t(`period.${period}`)}</option>)}</optgroup></select></label></div><div className="team-analysis-analysis-workspace"><div className="team-analysis-category-tabs" role="tablist">{([["attacking",Target],["defending",Shield],["passing",ArrowLeftRight],["possession",Swords],["discipline",Flag],["goalkeeping",Hand]] as const).map(([id,Icon])=><button key={id} role="tab" aria-selected={performanceCategory===id} className={performanceCategory===id?"active":""} onClick={()=>setPerformanceCategory(id)}><Icon size={15}/>{t(`teamAnalysis.${id==="possession"?"possessionCategory":id}`)}</button>)}</div><TeamAnalysisStatisticalPerformance data={data} teamId={teamId} filters={performanceFilters} category={performanceCategory} /><TeamAnalysisSeasonTrend data={data} teamId={teamId} filters={performanceFilters} category={performanceCategory} /><TeamAnalysisScatter data={data} teamId={teamId} filters={performanceFilters} category={performanceCategory} /></div></section>}
-    {tab === "tactical" && <section className="team-analysis-tab-content"><TacticalDNAWorkspace data={data} teamId={teamId} season={season}/></section>}
-    {tab === "strengths" && <section className="team-analysis-tab-content"><StrengthsWeaknesses data={data} teamId={teamId} season={season}/></section>}
-    {tab === "comparisons" && <section className="team-analysis-tab-content"><TeamComparisons data={data} teamId={teamId} season={season}/></section>}
-    {tab === "seasonEvolution" && <section className="team-analysis-tab-content"><SeasonEvolution data={data} teamId={teamId} season={season}/></section>}
+    {tab === "performance" && <section className="team-analysis-tab-content"><div className="team-analysis-shared-filters"><label><span>{t("filters.fromMatchday")}</span><select disabled={!performanceLatestWeek} aria-label={t("filters.fromMatchday")} value={performanceFilters.from} onChange={event=>{const week=Number(event.target.value);setPerformanceFrom(week);if(week>performanceFilters.to)setPerformanceTo(week);}}>{Array.from({length:performanceMaxWeek},(_,index)=><option key={index+1} value={index+1}>{performanceLatestWeek?index+1:"—"}</option>)}</select></label><label><span>{t("filters.toMatchday")}</span><select disabled={!performanceLatestWeek} aria-label={t("filters.toMatchday")} value={performanceFilters.to} onChange={event=>{const week=Number(event.target.value);setPerformanceTo(week);if(week<performanceFilters.from)setPerformanceFrom(week);}}>{Array.from({length:performanceMaxWeek},(_,index)=><option key={index+1} value={index+1}>{performanceLatestWeek?index+1:"—"}</option>)}</select></label><label><span>{t("filters.venue")}</span><select value={performanceVenue} onChange={event=>setPerformanceVenue(event.target.value as VenueFilter)}><option value="all">{t("filters.allVenues")}</option><option value="home">{t("filters.home")}</option><option value="away">{t("filters.away")}</option></select></label><label><span>{t("filters.matchPeriod")}</span><select value={performancePeriod} onChange={event=>setPerformancePeriod(event.target.value as MatchPeriod)}><optgroup label={t("teamAnalysis.matchPeriodGroup")}><option value="ft">{t("ui.fullMatch")}</option><option value="fh">{t("ui.firstHalf")}</option><option value="sh">{t("ui.secondHalf")}</option></optgroup><optgroup label={t("teamAnalysis.minutePeriodsGroup")}>{(["m_1_15","m_16_30","m_31_45","m_46_60","m_61_75","m_76_90","m_1_30","m_31_60","m_61_90"] as MatchPeriod[]).map(period=><option key={period} value={period}>{t(`period.${period}`)}</option>)}</optgroup></select></label></div><div className="team-analysis-analysis-workspace"><div className="team-analysis-category-tabs" role="tablist">{([["attacking",Target],["defending",Shield],["passing",ArrowLeftRight],["possession",Swords],["discipline",Flag],["goalkeeping",Hand]] as const).map(([id,Icon])=><button key={id} role="tab" aria-selected={performanceCategory===id} className={performanceCategory===id?"active":""} onClick={()=>setPerformanceCategory(id)}><Icon size={15}/>{t(`teamAnalysis.${id==="possession"?"possessionCategory":id}`)}</button>)}</div><TeamAnalysisStatisticalPerformance data={data} teamId={teamId} filters={performanceFilters} category={performanceCategory} /><TeamAnalysisSeasonTrend data={data} teamId={teamId} filters={performanceFilters} category={performanceCategory} /></div></section>}
+    <Activity mode={tab === "comparisons" ? "visible" : "hidden"}><section className="team-analysis-tab-content"><TeamComparisonWorkspace key={season} data={data} teamId={teamId} season={season} view={comparisonView} onViewChange={setComparisonView}/></section></Activity>
+    <Activity mode={tab === "seasonEvolution" ? "visible" : "hidden"}><section className="team-analysis-tab-content"><SeasonEvolutionWorkspace key={`${teamId}:${evolutionSeason}`} data={data} teamId={teamId} season={evolutionSeason}/></section></Activity>
     {tab === "forecast" && <section className="team-analysis-tab-content"><ForecastFoundation /></section>}
+    </>}
   </section>;
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, ArrowLeftRight, ArrowRight, BarChart3, CalendarClock, CalendarDays, ChartNoAxesColumn, ChartNoAxesCombined, ClipboardList, LayoutDashboard, ListChecks,
   ChevronDown, ChevronLeft, ChevronRight, Database, Goal, Map as MapIcon,
@@ -9,7 +9,7 @@ import { useI18n, type Locale } from "@/lib/i18n";
 import SettingsMenu from "./settings-menu";
 import { completed, goalSummary, goalTrend, leagueTrend, standings } from "@/lib/analytics";
 import type { LeagueTrendMetric, LeagueTrendPoint } from "@/lib/analytics";
-import { defaultMatchday, fixturesForMode, PERIODS, periodLabel as rawPeriodLabel, seasonPartLabel, venueLabel, seasonSubset, scoresForPeriod, statsForPeriod, teamVenueMatches } from "@/lib/filters";
+import { canPreviewFixture, defaultMatchday, fixturesForMode, latestMatchdayWithResults, PERIODS, periodLabel as rawPeriodLabel, seasonPartLabel, venueLabel, seasonSubset, scoresForPeriod, statsForPeriod, teamVenueMatches } from "@/lib/filters";
 import type { FixtureMode } from "@/lib/filters";
 import type { Dashboard as Data, Match, MatchPeriod, SeasonPart, Team, TimelineEvent, VenueFilter } from "@/lib/types";
 import type { MatchPrediction } from "@/lib/predictions";
@@ -395,7 +395,9 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
     {label:t("stats.metric.pass_attempt"),h:home?.passes,a:away?.passes,pct:false},
     {label:t("stats.metric.pass_completion_pct"),h:home?.passCompletion,a:away?.passCompletion,pct:true}
   ];
-  const archive=data.historicalMatches;
+  const archive=isFixture
+    ? [...new Map([...data.historicalMatches,...data.matches].map(game=>[game.id,game])).values()]
+    : data.historicalMatches;
   const homeRecent=isFixture?recentMatches(archive,match.homeId,match.date):[];
   const awayRecent=isFixture?recentMatches(archive,match.awayId,match.date):[];
   const statisticsOptions:{lens:"for"|"against";venue:VenueFilter;period:MatchPeriod;before:string}={lens:statsLens==="team"?"for":"against",venue:(averageScope==="venue"?"home":"all") as VenueFilter,period,before:match.date};
@@ -438,7 +440,7 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
       {match.attendance!==null&&<span className="venue-attendance"><Users size={13}/>{match.attendance.toLocaleString("en-GB")}</span>}
     </div>
     {match.finished?<CompletedMatchDetails match={match} home={home} away={away} onAnalysis={()=>window.location.assign(`/results/${match.id}`)}/>:<>
-    <nav className="dialog-tabs" aria-label={t("ui.fixturePreviewSections")}><button className={panel==="overview"?"active":""} onClick={()=>setPanel("overview")}><LayoutDashboard size={14}/>{t("nav.overview")}</button><button className={panel==="predictions"?"active":""} onClick={()=>setPanel("predictions")}><ChartNoAxesCombined size={14}/>{t("ui.predictions")}</button><button className={panel==="statistics"?"active":""} onClick={()=>setPanel("statistics")}><ChartNoAxesColumn size={14}/>{t("ui.statistics")}</button><button className={panel==="intelligence"?"active":""} onClick={()=>setPanel("intelligence")}><Sparkles size={14}/>{t("ui.intelligence")}</button></nav>
+    <nav className="dialog-tabs" aria-label={t("ui.fixturePreviewSections")}><button className={panel==="overview"?"active":""} onClick={()=>setPanel("overview")}><LayoutDashboard size={14}/>{t("nav.overview")}</button><button className={panel==="statistics"?"active":""} onClick={()=>setPanel("statistics")}><ChartNoAxesColumn size={14}/>{t("ui.statistics")}</button><button className={panel==="intelligence"?"active":""} onClick={()=>setPanel("intelligence")}><Sparkles size={14}/>{t("ui.intelligence")}</button><button className={panel==="predictions"?"active":""} onClick={()=>setPanel("predictions")}><ChartNoAxesCombined size={14}/>{t("ui.predictions")}</button></nav>
     {panel==="statistics"&&match.finished&&<><h3 className="section-subtitle">{period==="ft"?t("ui.fullTimeComparison"):rawPeriodLabel(period)+" · "+t("ui.comparison")}</h3>
     {rows.map(row=>{
       const available=row.h!=null && row.a!=null;
@@ -456,7 +458,7 @@ function MatchDialog({match,data,period,onClose}:{match:Match;data:Data;period:M
       <HistoricalHeadToHead data={h2hData} loading={h2hLoading} error={h2hError} expanded={h2hExpanded} onExpand={()=>setH2hExpanded(value=>!value)} homeName={homeDisplayName} awayName={awayDisplayName} scope={h2hScope} onScopeChange={scope=>{setH2hScope(scope);setH2hExpanded(false);}}/>
     </section>}
     {panel==="statistics"&&<section className="fixture-preview statistics-preview" aria-label={t("ui.seasonStatistics")}><div className="preview-title-row"><div><h3>{statsLens==="team"?t("ui.teamAverages"):t("ui.opponentAverages")}</h3>{averageScope==="venue"&&<small className="stats-venue-note">{homeDisplayName} at home · {awayDisplayName} away</small>}</div><div className="preview-tabs"><button className={averageScope==="all"?"active":""} onClick={()=>setAverageScope("all")}>{t("ui.season")}</button><button className={averageScope==="venue"?"active":""} onClick={()=>setAverageScope("venue")}>{t("ui.venue")}</button></div></div><div className="stats-lens-row"><div className="stats-lens"><button className={statsLens==="team"?"active":""} onClick={()=>setStatsLens("team")}>{t("ui.team")}</button><button className={statsLens==="opponent"?"active":""} onClick={()=>setStatsLens("opponent")}>{t("ui.opponent")}</button></div><span className="stats-lens-note">{t("ui.forOutput")} · {t("ui.againstOutput")}</span></div><div className="stat-category-tabs"><button className={statsCategory==="attack"?"active":""} onClick={()=>setStatsCategory("attack")}>{t("ui.attackCategory")}</button><button className={statsCategory==="defense"?"active":""} onClick={()=>setStatsCategory("defense")}>{t("ui.defenseCategory")}</button><button className={statsCategory==="passing"?"active":""} onClick={()=>setStatsCategory("passing")}>{t("ui.passingCategory")}</button><button className={statsCategory==="discipline"?"active":""} onClick={()=>setStatsCategory("discipline")}>{t("ui.disciplineCategory")}</button></div><div className="average-grid"><strong>{match.home}</strong><span>{t("ui.metric")}</span><strong>{match.away}</strong>{statisticsRows.map(row=><Fragment key={row.label}><b>{typeof row.home==="number"?(row.percent?percent(row.home*100):row.home.toFixed(1)):"?"}</b><span>{row.label}</span><b>{typeof row.away==="number"?(row.percent?percent(row.away*100):row.away.toFixed(1)):"?"}</b></Fragment>)}</div></section>}
-    {panel==="statistics"&&<><StatisticsControls lens={statsLens} scope={averageScope} onLensChange={setStatsLens} onScopeChange={setAverageScope}/><StatisticsCategoryTabs value={statsCategory} onChange={setStatsCategory}/><PreviewComparisonBars rows={statisticsRows} homeName={homeDisplayName} awayName={awayDisplayName} reference={leagueReference} context=""/></>} {panel==="predictions"&&<InsightsPlaceholder insightType="predictions" description="Future validated outputs: expected goals, outcome probabilities and scoreline probabilities."/>} {panel==="intelligence"&&(<InsightsPlaceholder insightType="match-preview" description="Future analysis of tactical strengths, weaknesses, playing styles and matchup-specific patterns."/>)}</>}
+    {panel==="statistics"&&<><StatisticsControls lens={statsLens} scope={averageScope} onLensChange={setStatsLens} onScopeChange={setAverageScope}/><StatisticsCategoryTabs value={statsCategory} onChange={setStatsCategory}/><PreviewComparisonBars rows={statisticsRows} homeName={homeDisplayName} awayName={awayDisplayName} reference={leagueReference} context=""/></>} {panel==="predictions"&&<InsightsPlaceholder title={t("ui.predictions")} insightType="predictions"/>} {panel==="intelligence"&&<InsightsPlaceholder title={t("ui.intelligence")} insightType="intelligence"/>}</>}
   </dialog>;
 }
 
@@ -474,17 +476,23 @@ export default function Dashboard() {
   const [error,setError]=useState("");
   const router=useRouter();
   const pathname=usePathname();
+  const searchParams=useSearchParams();
   const isMatchReport=/^\/(results|matches)\/\d+$/.test(pathname);
-  const teamAnalysisMatch = pathname.match(/^\/teams\/(\d+)$/);
+  const teamAnalysisMatch = pathname.match(/^\/teams\/(\d+)(?:\/(?:season-evolution|season-statistics|statistical-evolution))?$/);
   const teamAnalysisId = teamAnalysisMatch ? Number(teamAnalysisMatch[1]) : null;
   const view:View=pathname==="/goals" ? "goals" : pathname==="/matches" ? "results" : teamAnalysisId !== null ? "teamAnalysis" : allNavigation.find(item=>"/"+item.id===pathname)?.id??(isMatchReport?"results":"overview");
-  // Only Results and Standings browse historical seasons. All other dashboard
-  // views are always backed by the newest imported Bundesliga season.
-  const seasonSelectable = view === "results" || view === "standings" || view === "teamAnalysis";
+  const inTeamAnalysis = view === "teamAnalysis";
+  const analysisSeason = inTeamAnalysis ? searchParams.get("season")?.trim().replace(/\s*[/-]\s*/, "-") || "" : "";
+  const requestedSeason = inTeamAnalysis ? analysisSeason : view === "results" || view === "standings" ? season : "";
+  const changeAnalysisSeason = (next: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("season", next);
+    router.push(`${pathname}?${params}`, {scroll:false});
+  };
   const setView=(next:View)=>router.push("/"+next);
   const navigation=allNavigation;
   const [standingsFrom,setStandingsFrom]=useState(1);
-  const [standingsTo,setStandingsTo]=useState(34);
+  const [standingsTo,setStandingsTo]=useState(1);
   const [standingsFiltersOpen,setStandingsFiltersOpen]=useState(false);
   const previousView=useRef<View>(view);
   const [query,setQuery]=useState("");
@@ -497,16 +505,18 @@ export default function Dashboard() {
   const [overviewMetric,setOverviewMetric]=useState<LeagueTrendMetric>("goals");
   const [seasonPart,setSeasonPart]=useState<SeasonPart>("all");
   const [venue,setVenue]=useState<VenueFilter>("all");
-  const historyDataRequired=view==="history"||view==="teamAnalysis";
+  const historyDataRequired=view==="history";
+  const cacheKey = JSON.stringify([requestedSeason, inTeamAnalysis, historyDataRequired, revision]);
+  const [appliedDashboardKey, setAppliedDashboardKey] = useState("");
+  const analysisPending = inTeamAnalysis && cacheKey !== appliedDashboardKey;
   useEffect(()=>{
     const controller=new AbortController();
     setLoading(true);setError("");setSelected(null);
-    const requestedSeason = seasonSelectable ? season : "";
-    const cacheKey=`${requestedSeason||"latest"}:${historyDataRequired?"history-v3":"compact"}:${revision}`;
     const applyDashboard=(body:Data)=>{
       const changed=loadedSeason.current!==body.season;
       loadedSeason.current=body.season;
       setData(body);
+      setAppliedDashboardKey(cacheKey);
       if(changed){
         const mode:FixtureMode=view==="upcoming"?"upcoming":"results";
         setWeek(String(defaultMatchday(body.matches,mode)??""));setTeamId(null);
@@ -519,6 +529,7 @@ export default function Dashboard() {
     }
     const params=new URLSearchParams();
     if(requestedSeason)params.set("season",requestedSeason);
+    if(inTeamAnalysis)params.set("teamAnalysis","1");
     if(historyDataRequired){params.set("includeHistory","1");params.set("historyVersion","3");}
     fetch("/api/dashboard"+(params.size?`?${params.toString()}`:""),{signal:controller.signal,cache:"no-store"})
       .then(async response=>{
@@ -533,27 +544,46 @@ export default function Dashboard() {
       .catch(err=>{if(err.name!=="AbortError")setError(err.message);})
       .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     return ()=>controller.abort();
-  },[season,seasonSelectable,historyDataRequired,revision]);
+  },[cacheKey,requestedSeason,inTeamAnalysis,historyDataRequired]);
 
 
   const effectiveMode:FixtureMode=view==="upcoming"?"upcoming":"results";
   const seasonMatchdayCount=useMemo(()=>Math.max(1,...(data?.matches??[]).map(match=>match.week).filter(week=>week>0)),[data]);
+  const standingsLastMatchday=useMemo(()=>latestMatchdayWithResults(data?.matches??[])??1,[data]);
+  const firstHalfEnd = Math.ceil(seasonMatchdayCount / 2);
+  const hasSecondHalfStandings = standingsLastMatchday > firstHalfEnd;
+  const activeSeasonPart = view === "standings" && seasonPart === "second" && !hasSecondHalfStandings
+    ? "all"
+    : seasonPart;
+  const standingsPhaseStart = activeSeasonPart === "second" ? firstHalfEnd + 1 : 1;
+  const standingsPhaseEnd = activeSeasonPart === "first" ? Math.min(firstHalfEnd, standingsLastMatchday) : standingsLastMatchday;
+  const standingsMatchdays = Array.from(
+    {length: Math.max(0, standingsPhaseEnd - standingsPhaseStart + 1)},
+    (_, index) => standingsPhaseStart + index,
+  );
   const historicalSeason=Boolean(data?.matches.some(match=>match.historical));
   useEffect(()=>{
-    setStandingsFrom(1);
-    setStandingsTo(seasonMatchdayCount);
-  },[data?.season,seasonMatchdayCount]);
+    if (view !== "standings") return;
+    if (seasonPart !== activeSeasonPart) setSeasonPart(activeSeasonPart);
+    setStandingsFrom(standingsPhaseStart);
+    setStandingsTo(standingsPhaseEnd);
+  },[view,data?.season,seasonPart,activeSeasonPart,standingsPhaseStart,standingsPhaseEnd]);
   useEffect(()=>{ if (historicalSeason) setPeriod("ft"); },[historicalSeason]);
   const activePeriod: MatchPeriod = historicalSeason ? "ft" : period;
   // Upcoming is deliberately fixture-only: it must not inherit result filters.
-  const phaseMatches=useMemo(()=>view==="upcoming"?(data?.matches??[]):seasonSubset(data?.matches??[],seasonPart,seasonMatchdayCount),[data,seasonPart,view,seasonMatchdayCount]);
+  const phaseMatches=useMemo(()=>view==="upcoming"?(data?.matches??[]):seasonSubset(data?.matches??[],activeSeasonPart,seasonMatchdayCount),[data,activeSeasonPart,view,seasonMatchdayCount]);
   const scoredMatches=useMemo(()=>view==="upcoming"?phaseMatches:scoresForPeriod(phaseMatches,data?.stats??[],activePeriod),[phaseMatches,data,activePeriod,view]);
   const fixtureMatches=useMemo(()=>fixturesForMode(scoredMatches,effectiveMode),[scoredMatches,effectiveMode]);
   const roundMatches=useMemo(()=>week==="all"?fixtureMatches:fixtureMatches.filter(m=>m.week===Number(week)),[fixtureMatches,week]);
   const isTeamHistory=view==="results" && teamId!==null;
   const teamMatches=useMemo(()=>teamVenueMatches(roundMatches,teamId??-1,venue),[roundMatches,teamId,venue]);
   const tableMatches=useMemo(()=>view==="standings"?scoredMatches.filter(m=>m.week>=standingsFrom&&m.week<=standingsTo):scoredMatches,[view,scoredMatches,standingsFrom,standingsTo]);
-  const scopeMatches=view==="standings"?tableMatches:isTeamHistory?teamMatches:roundMatches;
+  const resultRoundMatches=useMemo(()=>{
+    if (view!=="results" || isTeamHistory) return roundMatches;
+    const resultWeeks=new Set(roundMatches.map(match=>match.week).filter(matchday=>matchday>0));
+    return [...roundMatches,...scoredMatches.filter(match=>!match.finished&&resultWeeks.has(match.week))];
+  },[view,isTeamHistory,roundMatches,scoredMatches]);
+  const scopeMatches=view==="standings"?tableMatches:isTeamHistory?teamMatches:resultRoundMatches;
   const historyMatches=scoredMatches;
     const selectedSeasonConfig = data?.seasonConfigs?.find(config=>config.season===data.season);
     const pointsForWin= selectedSeasonConfig?.rules?.pointsForWin ?? 3;
@@ -610,7 +640,10 @@ export default function Dashboard() {
   const overviewCompleted=useMemo(()=>completed(data?.matches??[]),[data]);
   const latestCompletedWeek=useMemo(()=>Math.max(0,...overviewCompleted.map(match=>match.week)),[overviewCompleted]);
   const overviewResults=useMemo(()=>overviewCompleted.filter(match=>match.week===latestCompletedWeek).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id),[overviewCompleted,latestCompletedWeek]);
-  const overviewScheduled=useMemo(()=>(data?.matches??[]).filter(match=>match.week===latestCompletedWeek).length-overviewResults.length,[data,latestCompletedWeek,overviewResults]);
+  const overviewFixtures=useMemo(()=>latestCompletedWeek>0
+    ?(data?.matches??[]).filter(match=>match.week===latestCompletedWeek).sort((a,b)=>a.date.localeCompare(b.date)||a.id-b.id)
+    :[],[data,latestCompletedWeek]);
+  const overviewScheduled=overviewFixtures.filter(match=>match.status==="scheduled"||match.status==="live").length;
   const overviewSummary=useMemo(()=>{
     const goals=overviewResults.reduce((sum,match)=>sum+(match.homeGoals??0)+(match.awayGoals??0),0);
     const attendance=overviewResults.filter(match=>typeof match.attendance==="number");
@@ -669,20 +702,20 @@ export default function Dashboard() {
       const group=groups.get(key)??[];
       group.push(match); groups.set(key,group); return groups;
     },new Map<string,Match[]>()).entries()).sort(([a],[b])=>a.localeCompare(b)).map(([key,matches])=>({key,matches:matches.sort((a,b)=>new Date(a.date).getTime()-new Date(b.date).getTime())})) : [{key:"",matches:visible}];
-    const renderFixture=(m:Match,showRowMatchday=false)=>{const shortHome=data!.shortTeamNames?.[String(m.homeId)] ?? abbreviate(m.home); const shortAway=data!.shortTeamNames?.[String(m.awayId)] ?? abbreviate(m.away); const canPreview=!m.historical&&(m.finished||(view==="upcoming"&&m.week===preferredWeek&&m.status==="scheduled")); return <button key={m.id} disabled={!canPreview} className={"match-row grouped"+(isTeamHistory||!m.finished?" history-row":"")+(canPreview?"":" calendar-only")} onClick={canPreview?()=>m.finished?router.push(`/results/${m.id}`):setSelected(m):undefined}>
+    const renderFixture=(m:Match,showRowMatchday=false)=>{const shortHome=data!.shortTeamNames?.[String(m.homeId)] ?? abbreviate(m.home); const shortAway=data!.shortTeamNames?.[String(m.awayId)] ?? abbreviate(m.away); const canPreview=!m.historical&&(m.finished||(view==="upcoming"&&canPreviewFixture(m,phaseMatches))); return <button key={m.id} disabled={!canPreview} className={"match-row grouped"+(isTeamHistory||!m.finished?" history-row":"")+(canPreview?"":" calendar-only")} onClick={canPreview?()=>m.finished?router.push(`/results/${m.id}`):setSelected(m):undefined}>
       {(view==="results"||isTeamHistory||!m.finished)&&<span className="history-fixture-meta">{(view!=="results"||isTeamHistory)&&<span>{displayDate(m.date)}</span>}<span>{kickoffTime(m.date)}</span>{showRowMatchday&&m.week>0&&<span className="fixture-matchday">MATCHDAY {m.week}</span>}</span>}
       <span className="match-teams"><span className="home-team"><span><span className="desktop-team-name">{data!.fullTeamNames?.[m.home] ?? shortHome}</span><span className="mobile-team-name">{shortHome}</span></span><Badge name={m.home} logos={data!.logos}/></span>
         <strong className="match-score">{m.finished?<>{m.homeGoals??"\u2014"} <span>&ndash;</span> {m.awayGoals??"\u2014"}</>:"vs"}</strong>
         <span className="away-team"><Badge name={m.away} logos={data!.logos}/><span><span className="desktop-team-name">{data!.fullTeamNames?.[m.away] ?? shortAway}</span><span className="mobile-team-name">{shortAway}</span></span></span></span>
-      <span className="match-total">{view==="results"?<span className="fixture-status finished">{t("dash.fullTime").toUpperCase()}</span>:m.finished&&m.homeGoals!==null&&m.awayGoals!==null?<b className="goal-total">{m.homeGoals+m.awayGoals} {m.homeGoals+m.awayGoals===1?"goal":"goals"}</b>:<span className={"fixture-status "+m.status}>{canPreview?"Preview":fixtureLabel(m)}</span>}{canPreview&&<ChevronRight size={15}/>}</span>
+      <span className="match-total">{view==="results"?<span className={"fixture-status "+m.status}>{m.finished?t("dash.fullTime").toUpperCase():m.status==="scheduled"?t("dash.scheduled"):fixtureLabel(m)}</span>:m.finished&&m.homeGoals!==null&&m.awayGoals!==null?<b className="goal-total">{m.homeGoals+m.awayGoals} {m.homeGoals+m.awayGoals===1?"goal":"goals"}</b>:<span className={"fixture-status "+m.status}>{canPreview?"Preview":fixtureLabel(m)}</span>}{canPreview&&<ChevronRight size={15}/>}</span>
       {view!=="upcoming"&&<span className="fixture-venue">{view!=="results"&&<span className="fixture-stadium"><StadiumIcon team={m.home} stadiums={data!.stadiums}/><span>{m.venue||"Venue unavailable"}</span></span>}{m.attendance!==null&&<span className="fixture-attendance" aria-label={"Attendance: "+m.attendance.toLocaleString("en-GB")}><Users size={11}/>{m.attendance.toLocaleString("en-GB")}</span>}</span>}
     </button>};
     return <section className={"panel results-panel"+(view==="results"?" results-list-page":"")}>
       <div className="panel-heading"><div>
         <h2>{selectedTeam?selectedTeam.name:week==="all"?t("dash.allMatchdays"):week?matchdayText(Number(week)):effectiveMode==="upcoming"?t("dash.upcomingFixtures"):t("dash.results")}</h2>
-        <p className="match-range">{isTeamHistory?displaySeason(data!.season)+"   ·   "+visible.length+(effectiveMode==="upcoming"?" upcoming matches":" played matches"):matchdayDates(visible)}</p>
+        <p className="match-range">{isTeamHistory?displaySeason(data!.season)+"   ·   "+visible.length+(effectiveMode==="upcoming"?" upcoming matches":" played matches"):matchdayDates(visible,locale)}</p>
       </div>{isTeamHistory?<button className="text-button" onClick={()=>setTeamId(null)}><X size={13}/> {t("dash.clearTeamFilter")}</button>:view==="overview"?<button className="text-button" onClick={()=>selectView("results")}>{t("dash.viewResults")} <ArrowRight size={15}/></button>:null}</div>
-      {isTeamHistory&&<p className="team-history-note">{seasonPartText(seasonPart)}   ·   {venueText(venue)}   ·   {periodText(period)}</p>}
+      {isTeamHistory&&<p className="team-history-note">{seasonPartText(activeSeasonPart)}   ·   {venueText(venue)}   ·   {periodText(period)}</p>}
       <div className="match-list">
         {!visible.length&&<div className="empty"><Search size={24}/><p>{!query&&!teamId&&effectiveMode==="upcoming"?"No upcoming fixtures in this selection.":!query&&!teamId?"No results in this selection.":"No matches match these filters."}</p><button className="text-button" onClick={()=>{setQuery("");setTeamId(null);setSeasonPart("all");setPeriod("ft");setVenue("all");setWeek(String(defaultMatchday(data?.matches??[],effectiveMode)??""));}}>{t("dash.clearFilters")}</button></div>}
       {view==="results" ? (()=>{const shownMatchdays=new Set<number>();return dateGroups.map(group=>{const groupMatchday=group.matches[0]?.week??0;const showHeader=showMatchdayHeaders&&groupMatchday>0&&!shownMatchdays.has(groupMatchday);if(showHeader)shownMatchdays.add(groupMatchday);return <div className="match-date-group" key={group.key}>
@@ -719,7 +752,7 @@ export default function Dashboard() {
     };
     return <section className={"panel league-panel"+(full?" expanded":"")}>
       <div className="panel-heading"><div><h2>{period==="ft"?t("dash.seasonStandings"):t("dash.standingsForPeriod",{period:periodText(period)})}</h2>
-        <p className="match-range">{displaySeason(data!.season)}   ·   {seasonPartText(seasonPart)}   ·   {venueText(venue)}{view==="standings"?"   ·   MD "+standingsFrom+" to "+standingsTo:""}</p></div><Trophy size={19} className="muted"/></div>
+        <p className="match-range">{displaySeason(data!.season)}   ·   {seasonPartText(activeSeasonPart)}   ·   {venueText(venue)}{view==="standings"?"   ·   MD "+standingsFrom+" to "+standingsTo:""}</p></div><Trophy size={19} className="muted"/></div>
       <div className="table-scroll"><table><thead><tr><th scope="col">#</th><th scope="col">{t("dash.club")}</th><th scope="col">{t("dash.matchesPlayed")}</th><th className="mobile-priority-column" scope="col">+/-</th><th className="mobile-priority-column" scope="col">{t("dash.points")}</th><th scope="col">{t("dash.wins")}</th><th scope="col">{t("dash.draws")}</th><th scope="col">{t("dash.losses")}</th>{detailed&&<><th scope="col">{t("dash.goalsFor")}</th><th scope="col">{t("dash.goalsAgainst")}</th></>}<th scope="col">+/-</th><th scope="col">{t("dash.points")}</th>{detailed&&<th scope="col">{t("standings.form")}</th>}</tr></thead>
         <tbody>{teams.map(t=>{const position=tableTeams.indexOf(t)+1;const zone=zoneFor(position,t.id);return <tr key={t.id} className={zone?`standing-zone-${zone.className}`:undefined}><td><span className={"rank "+(position<=4?"top ":"")+(zone?.className??"")} title={zone?.label}>{position}</span></td><td><button className="club-link" onClick={()=>{setTeamId(t.id);setQuery("");setWeek("all");setView("results");}}><Badge name={t.name} logos={data!.logos}/><span className="desktop-team-name">{data!.fullTeamNames?.[t.name] ?? t.name}</span><span className="mobile-team-name">{data!.shortTeamNames?.[String(t.id)] ?? abbreviate(t.name)}</span></button></td><td>{t.played}</td><td className="mobile-priority-column">{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="mobile-priority-column points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td><td>{t.won}</td><td>{t.drawn}</td><td>{t.lost}</td>{detailed&&<><td>{t.gf}</td><td>{t.ga}</td></>}<td>{t.gf-t.ga>0?"+":""}{t.gf-t.ga}</td><td className="points" title={t.points_adjustment ? `Points adjustment: ${t.points_adjustment}` : undefined}>{t.points}{t.points_adjustment ? <small className="standings-deduction"> ({t.points_adjustment > 0 ? "+" : ""}{t.points_adjustment})</small> : null}</td>{detailed&&<td><StandingsForm matches={tableMatches} teamId={t.id} venue={venue} locale={locale}/></td>}</tr>})}</tbody></table></div>
       {!teams.length&&<p className="empty">No clubs match your search.</p>}
@@ -758,19 +791,23 @@ export default function Dashboard() {
     return <div className="overview-dashboard">
       <div className="overview-summary-cards overview-summary-cards-main" aria-label="Latest matchday summary">
         <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.totalGoals")}</span><strong className="overview-kpi-value">{overviewResults.length?overviewSummary.goals:"-"}</strong><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
-        <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.averageAttendance")}</span><strong className="overview-kpi-value">{overviewSummary.attendanceAverage===null?"-":Math.round(overviewSummary.attendanceAverage).toLocaleString("en-GB")}</strong><small className="overview-kpi-description">{overviewSummary.attendanceReported?t("dash.attendanceCoverage",{reported:overviewSummary.attendanceReported,total:overviewResults.length}):t("dash.attendanceUnavailable")}</small></div>
+        <div className="overview-summary-card overview-kpi-card"><span className="overview-kpi-label">{t("dash.averageAttendance")}</span><strong className="overview-kpi-value">{overviewSummary.attendanceAverage===null?"-":Math.round(overviewSummary.attendanceAverage).toLocaleString("en-GB")}</strong><small className="overview-kpi-description">{overviewSummary.attendanceReported?t("dash.attendanceCoverage",{reported:overviewSummary.attendanceReported,total:overviewFixtures.length}):t("dash.attendanceUnavailable")}</small></div>
         <div className="overview-summary-card overview-kpi-card home-results-card"><span className="overview-kpi-label">{t("dash.homeResults")}</span><div className="overview-kpi-value home-results-line"><b><i>{overviewSummary.homeResults.won}</i>W</b><span>–</span><b><i>{overviewSummary.homeResults.drawn}</i>D</b><span>–</span><b><i>{overviewSummary.homeResults.lost}</i>L</b></div><small className="overview-kpi-description">{latestCompletedWeek?`${matchdayText(latestCompletedWeek)} ${String.fromCharCode(8211)} ${t("dash.completedMatchesSuffix")}`:t("dash.noCompletedMatchday")}</small></div>
       </div>      <div className="overview-top-grid">
         <section className="panel overview-results">
-          <div className="panel-heading"><div><span className="eyebrow">{t("dash.latestResults")}</span><h2>{latestCompletedWeek?matchdayText(latestCompletedWeek):t("dash.noCompletedMatchday")}</h2><p className="match-range">{matchdayDates(overviewResults,locale)}{overviewScheduled>0?t("dash.fixtureStillToPlay",{count:overviewScheduled}):""}</p></div><button className="text-button" onClick={()=>selectView("results")}>{t("dash.viewAllResults")} <ArrowRight size={13}/></button></div>
-          <div className="overview-results-list">{overviewResults.map(match=><button key={match.id} className="overview-result" onClick={()=>setSelected(match)}>
-  <div className="overview-result-main">
-    <span className="overview-club home"><span>{data!.shortTeamNames?.[String(match.homeId)] ?? abbreviate(match.home)}</span><Badge name={match.home} logos={data!.logos}/></span>
-    <strong>{match.homeGoals} <span>&ndash;</span> {match.awayGoals}</strong>
-    <span className="overview-club away"><Badge name={match.away} logos={data!.logos}/><span>{data!.shortTeamNames?.[String(match.awayId)] ?? abbreviate(match.away)}</span></span>
-  </div>
-  
-</button>)}</div>
+          <div className="panel-heading"><div><span className="eyebrow">{t("dash.latestResults")}</span><h2>{latestCompletedWeek?matchdayText(latestCompletedWeek):t("dash.noCompletedMatchday")}</h2><p className="match-range">{matchdayDates(overviewFixtures,locale)}{overviewScheduled>0?` · ${t("dash.fixtureStillToPlay",{count:overviewScheduled})}`:""}</p></div><button className="text-button" onClick={()=>selectView("results")}>{t("dash.viewAllResults")} <ArrowRight size={13}/></button></div>
+          <div className="overview-results-list">{overviewFixtures.map(match=>{
+            const fixture=<div className="overview-result-main">
+              <span className="overview-club home"><span>{data!.shortTeamNames?.[String(match.homeId)] ?? abbreviate(match.home)}</span><Badge name={match.home} logos={data!.logos}/></span>
+              {match.finished
+                ?<strong>{match.homeGoals??"—"} <span>&ndash;</span> {match.awayGoals??"—"}</strong>
+                :<span className={"fixture-status "+match.status}>{match.status==="scheduled"?kickoffTime(match.date):fixtureLabel(match)}</span>}
+              <span className="overview-club away"><Badge name={match.away} logos={data!.logos}/><span>{data!.shortTeamNames?.[String(match.awayId)] ?? abbreviate(match.away)}</span></span>
+            </div>;
+            return match.finished
+              ?<button key={match.id} className="overview-result" onClick={()=>setSelected(match)}>{fixture}</button>
+              :<div key={match.id} className="overview-result overview-scheduled-result">{fixture}</div>;
+          })}</div>
           {!overviewResults.length&&<p className="empty">{t("dash.noCompletedMatches")}</p>}
         </section>
         <section className="panel overview-standings">
@@ -838,11 +875,11 @@ export default function Dashboard() {
           {view==="standings"&&<>
             <div className="filter-field"><label htmlFor="standings-from">{t("filters.fromMatchday")}</label><div className="season-selector">
               <select id="standings-from" aria-label={t("filters.fromMatchday")} value={standingsFrom} onChange={e=>{const next=Number(e.target.value);setStandingsFrom(next);setStandingsTo(previous=>Math.max(previous,next));}}>
-                {Array.from({length:seasonMatchdayCount},(_,i)=>i+1).map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
+                {standingsMatchdays.map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
               </select><ChevronDown size={14}/></div></div>
             <div className="filter-field"><label htmlFor="standings-to">{t("filters.toMatchday")}</label><div className="season-selector">
               <select id="standings-to" aria-label={t("filters.toMatchday")} value={standingsTo} onChange={e=>{const next=Number(e.target.value);setStandingsTo(next);setStandingsFrom(previous=>Math.min(previous,next));}}>
-                {Array.from({length:seasonMatchdayCount},(_,i)=>i+1).map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
+                {standingsMatchdays.map(w=><option value={w} key={w}>{matchdayText(w)}</option>)}
               </select><ChevronDown size={14}/></div></div>
           </>}
           {view!=="upcoming"&&view!=="results"&&<div className="filter-field venue-field">
@@ -853,8 +890,8 @@ export default function Dashboard() {
           </div>}
           {view!=="upcoming"&&view!=="results"&&<div className="filter-field">
             <label htmlFor="season-part-filter">{t("filters.seasonPhase")}</label>
-            <div className="season-selector"><select id="season-part-filter" aria-label={t("filters.seasonPhase")} value={seasonPart} onChange={e=>setSeasonPart(e.target.value as SeasonPart)}>
-              <option value="all">{t("filters.fullSeason")}</option><option value="first">{t("filters.firstHalf")}</option><option value="second">{t("filters.secondHalf")}</option>
+            <div className="season-selector"><select id="season-part-filter" aria-label={t("filters.seasonPhase")} value={activeSeasonPart} onChange={e=>setSeasonPart(e.target.value as SeasonPart)}>
+              <option value="all">{t("filters.fullSeason")}</option><option value="first">{t("filters.firstHalf")}</option>{(view!=="standings"||hasSecondHalfStandings)&&<option value="second">{t("filters.secondHalf")}</option>}
             </select><ChevronDown size={14}/></div>
           </div>}
           {view!=="upcoming"&&view!=="results"&&!historicalSeason&&<div className="filter-field">
@@ -863,15 +900,15 @@ export default function Dashboard() {
               {PERIODS.map(p=><option value={p.value} key={p.value}>{periodText(p.value)}</option>)}
             </select><ChevronDown size={14}/></div>
           </div>}
-          {view!=="upcoming"&&view!=="results"&&data&&!loading&&!error&&<div className="filter-context" role="status">
+          {view!=="upcoming"&&view!=="results"&&!inTeamAnalysis&&data&&!loading&&!error&&<div className="filter-context" role="status">
             <span className="status-dot"/><span>{view==="standings"?matchdayRangeText(standingsFrom,standingsTo):isTeamHistory?seasonPartText(seasonPart):matchdayText(Number(week))}</span>
             {view!=="standings"&&!isTeamHistory&&week!==String(preferredWeek??"")&&<button className="text-button" onClick={()=>setWeek(String(preferredWeek??""))}>{effectiveMode==="upcoming"?"Next fixture":"Latest"} <ChevronRight size={12}/></button>}
-            {view==="standings"&&<button className="text-button" onClick={()=>{setStandingsFrom(1);setStandingsTo(seasonMatchdayCount);setSeasonPart("all");setPeriod("ft");setVenue("all");setQuery("");}}>{t("dash.resetStandings")}</button>}
+            {view==="standings"&&<button className="text-button" onClick={()=>{setStandingsFrom(1);setStandingsTo(standingsLastMatchday);setSeasonPart("all");setPeriod("ft");setVenue("all");setQuery("");}}>{t("dash.resetStandings")}</button>}
           </div>}
           </div>
         </div>}
         <div aria-live="polite">
-          {loading ? <div className="loading-state"><LoaderCircle className="spin" size={29}/><h2>Reading the game...</h2><p>Loading imported Bundesliga results and statistics.</p><div className="skeleton-grid">{[1,2,3,4].map(i=><div className="skeleton" key={i}/>)}</div></div>:
+          {(loading || (analysisPending && !error)) && !(inTeamAnalysis && data?.teamAnalysisSeasons) ? <div className="loading-state"><LoaderCircle className="spin" size={29}/><h2>Reading the game...</h2><p>Loading imported Bundesliga results and statistics.</p><div className="skeleton-grid">{[1,2,3,4].map(i=><div className="skeleton" key={i}/>)}</div></div>:
           error ? <section className="error-state"><Database size={30}/><h2>Let's connect your data.</h2><p>{error}</p><button className="primary-button" onClick={()=>setRevision(v=>v+1)}><RefreshCw size={16}/> Try again</button></section>:
           data && (((view as string)==="teams"||(view as string)==="players") ? (view==="teams" ? <section className="team-directory"><div className="team-directory-grid">{data.teams.map(team=><button type="button" className="panel team-directory-card" key={team.id} onClick={()=>router.push(`/teams/${team.id}`)}><Badge name={team.name} logos={data.logos} large/><strong>{data.fullTeamNames?.[team.name] ?? team.name}</strong><span>{t("teamAnalysis.openAnalysis")}</span><ChevronRight size={15}/></button>)}</div></section> : <DevelopmentPage title={allNavigation.find(item=>item.id===view)?.label??"Page"}/>) : <>
             {missingPeriod>0&&<p className="coverage-note" role="status">{missingPeriod} played matches in this selection have no imported {periodText(period).toLowerCase()} score. Goal summaries exclude them.</p>}
@@ -890,7 +927,7 @@ export default function Dashboard() {
             {view==="history" && <BundesligaHistory data={data} />}
             {(view==="results"||view==="upcoming") && renderResults()}
             {view==="standings" && renderTable(true)}
-            {view==="teamAnalysis" && teamAnalysisId !== null && <TeamAnalysis data={data} teamId={teamAnalysisId} season={data.season} onSeasonChange={next=>{setSeason(next);setTeamId(teamAnalysisId);}} onBack={()=>router.push("/teams")} />}
+            {view==="teamAnalysis" && teamAnalysisId !== null && <TeamAnalysis key={teamAnalysisId} data={data} teamId={teamAnalysisId} season={analysisSeason || data.season} pending={analysisPending} onSeasonChange={changeAnalysisSeason} onBack={()=>router.push("/teams")} />}
 
             {(view==="players"||view==="predictions")&&<section className="panel coming-soon"><span className="eyebrow">ROADMAP</span><h2>{view==="players"?"Player analytics":"Predictions"}</h2><p>This page is prepared in navigation and will be developed in its scheduled phase.</p></section>}
             {view==="goals" && <div className="dashboard-grid">
@@ -917,7 +954,7 @@ export default function Dashboard() {
 
 
             {view==="goals"&&<section className="panel trend-panel trend-wide">
-              <div className="panel-heading"><div><span className="eyebrow">SCORING PATTERNS</span><h2>Average goals by matchday</h2><p className="match-range">{seasonPartText(seasonPart)}   ·   {periodText(period)}   ·   {venueText(venue)}</p></div><span className="legend"><i/> Goals / match</span></div>
+              <div className="panel-heading"><div><span className="eyebrow">SCORING PATTERNS</span><h2>Average goals by matchday</h2><p className="match-range">{seasonPartText(activeSeasonPart)}   ·   {periodText(period)}   ·   {venueText(venue)}</p></div><span className="legend"><i/> Goals / match</span></div>
               <TrendChart matches={historyMatches} venue={venue}/>
             </section>}
 

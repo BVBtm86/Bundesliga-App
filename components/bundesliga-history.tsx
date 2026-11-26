@@ -307,17 +307,17 @@ export default function BundesligaHistory({ data }: Props) {
   const leaveState = () => { stateLeaveTimer.current = setTimeout(() => { if (!selectedState) setHoveredState(null); }, 140); };
   const recordColumns: Record<HistoricalRecordView, Array<{ key: HistoricalSortKey; label: string; title: string; value: (row: HistoricalRecord) => string | number | null }>> = {
     overview: [
+      { key: "points", label: "Pts", title: "Points (standardized to three points per win)", value: row => row.points },
+      { key: "played", label: "MP", title: "Matches played", value: row => row.played },
       { key: "seasons", label: "S", title: "Seasons played", value: row => row.seasons },
       { key: "firstSeason", label: "FS", title: "First Bundesliga season", value: row => formatSeasonShort(row.firstSeason) },
       { key: "lastSeason", label: "LS", title: "Last Bundesliga season", value: row => formatSeasonShort(row.lastSeason) },
-      { key: "played", label: "MP", title: "Matches played", value: row => row.played },
       { key: "won", label: "W", title: "Wins", value: row => row.won },
       { key: "drawn", label: "D", title: "Draws", value: row => row.drawn },
       { key: "lost", label: "L", title: "Losses", value: row => row.lost },
       { key: "goalsFor", label: "GF", title: "Goals for", value: row => row.goalsFor },
       { key: "goalsAgainst", label: "GA", title: "Goals against", value: row => row.goalsAgainst },
       { key: "diff", label: "+/-", title: "Goal difference", value: row => row.diff > 0 ? `+${row.diff}` : row.diff },
-      { key: "points", label: "Pts", title: "Points (standardized to three points per win)", value: row => row.points },
       { key: "average", label: "PPG", title: "Points per game", value: row => row.average === null ? null : row.average.toFixed(2) },
     ],
     attacking: [
@@ -416,7 +416,7 @@ export default function BundesligaHistory({ data }: Props) {
       </div>
       {recordView !== "european" && <div className={`history-alltime-table history-records-${recordView}`} role="region" aria-label={t("dash.historicalRecords")}>
         <div className="history-alltime-row history-alltime-head"><span title="Rank">#</span><span title={t("dash.clubs")}>Club</span>{activeRecordColumns.map(column => <button key={column.key} title={column.title} type="button" onClick={() => toggleRecordSort(column.key)}>{column.label}</button>)}</div>
-        {sortedHistoricalTeamStats.map((row, rowIndex) => <div className={`history-alltime-row${selectedHistoryClub === row.id ? " selected" : ""}`} key={row.id} role="button" tabIndex={0} onClick={() => { setSelectedHistoryClub(row.id); setComparisonHistoryClub(null); }} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedHistoryClub(row.id); setComparisonHistoryClub(null); } }}><span className="history-record-rank">{rowIndex + 1}</span><strong><span className="history-record-club">{row.logo && <img src={row.logo} alt="" />}</span>{row.name}</strong>{activeRecordColumns.map(column => { const value = column.value(row); const className = column.key === "diff" ? row.diff > 0 ? "positive" : row.diff < 0 ? "negative" : "" : ""; return <span key={column.key} className={className}>{value ?? "—"}</span>; })}</div>)}
+        {sortedHistoricalTeamStats.map((row, rowIndex) => <div className={`history-alltime-row${selectedHistoryClub === row.id ? " selected" : ""}`} key={row.id} role="button" tabIndex={0} onClick={() => { setSelectedHistoryClub(row.id); setComparisonHistoryClub(null); }} onKeyDown={event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedHistoryClub(row.id); setComparisonHistoryClub(null); } }}><span className="history-record-rank">{rowIndex + 1}</span><strong><span className="history-record-club">{row.logo && <img src={row.logo} alt="" />}</span><span className="history-record-name">{row.name}</span></strong>{activeRecordColumns.map(column => { const value = column.value(row); const className = column.key === "diff" ? row.diff > 0 ? "positive" : row.diff < 0 ? "negative" : "" : ""; return <span key={column.key} className={className}>{value ?? "—"}</span>; })}</div>)}
       </div>} {recordView === "european" && europeanQualificationMatrix}
     </section>}
     {recordView === "overview" && selectedHistoryClub !== null && (() => { const selected = historicalTeamStats.find(row => row.id === selectedHistoryClub); return selected ? <dialog

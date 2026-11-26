@@ -2,7 +2,7 @@ import { Sparkles } from "lucide-react";
 
 type Props = {
   title?: string;
-  description: string;
+  description?: string;
   insightType?: string;
   integrationId?: string;
 };
@@ -10,6 +10,6 @@ type Props = {
 export default function InsightsPlaceholder({title="Insights",description,insightType,integrationId}:Props) {
   return <section className="insights-placeholder" data-insight-type={insightType} data-integration-id={integrationId} aria-label={title}>
     <Sparkles size={15} aria-hidden="true" />
-    <div><strong>{title}</strong><span>Coming later</span><p>{description}</p></div>
+    <div><strong>{title}</strong><span>Coming later</span>{description&&<p>{description}</p>}</div>
   </section>;
 }
